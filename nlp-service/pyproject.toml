@@ -1,0 +1,9 @@
+[project]
+name = "dipscore-nlp-service"
+version = "0.0.1"
+description = "DipScore 뉴스 감성분석 마이크로서비스"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

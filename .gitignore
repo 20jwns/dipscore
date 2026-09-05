@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────
+# 공통 / OS / 에디터
+# ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ─────────────────────────────────────────────
+# backend/ — Java / Gradle / Spring Boot
+# ─────────────────────────────────────────────
+.gradle/
+**/build/
+out/
+bin/
+*.class
+*.jar
+hs_err_pid*
+replay_pid*
+# Gradle wrapper jar 는 커밋한다
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# ─────────────────────────────────────────────
+# frontend/ — Flutter / Dart
+# ─────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/android/.gradle/
+frontend/android/local.properties
+frontend/android/key.properties
+frontend/android/app/upload-keystore.jks
+frontend/ios/Flutter/Flutter.framework
+frontend/ios/Flutter/Flutter.podspec
+frontend/ios/Pods/
+frontend/ios/.symlinks/
+frontend/ios/Runner.xcworkspace/xcuserdata/
+frontend/**/GeneratedPluginRegistrant.*
+*.g.dart
+*.freezed.dart
+coverage/
+.flutter-versions
+
+# ─────────────────────────────────────────────
+# nlp-service/ — Python / FastAPI
+# ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.Python
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ─────────────────────────────────────────────
+# infra / 데이터
+# ─────────────────────────────────────────────
+*.pem
+*.key
+pgdata/

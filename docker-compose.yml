@@ -1,0 +1,23 @@
+services:
+  db:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: dipscore-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dipscore
+      POSTGRES_PASSWORD: dipscore
+      POSTGRES_DB: dipscore
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - dipscore-db-data:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dipscore -d dipscore"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dipscore-db-data:

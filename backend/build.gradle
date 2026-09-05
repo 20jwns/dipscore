@@ -1,0 +1,46 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.4.1'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.dipscore'
+version = '0.0.1-SNAPSHOT'
+description = 'AI 모의투자 앱 백엔드 (매력도지수/저점진입스코어 계산엔진, 리스크관리, 주문실행부, 백테스트 엔진)'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Web / 운영
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+    // 영속성 - PostgreSQL + TimescaleDB
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+    runtimeOnly 'org.postgresql:postgresql'
+
+    // .env 파일 로딩 (application.yml 의 ${TOSS_CLIENT_ID} 등을 .env 에서 주입)
+    implementation 'me.paulschwarz:spring-dotenv:4.0.0'
+
+    // 설정 메타데이터(@ConfigurationProperties IDE 자동완성)
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+
+    // 테스트
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

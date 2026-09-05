@@ -1,0 +1,8 @@
+# 테스트 스코프에서는 실제 DB 없이도 컨텍스트가 뜨도록 DB 자동설정을 제외한다.
+# (DB 연동 통합테스트는 이후 Testcontainers 로 별도 구성 예정)
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
