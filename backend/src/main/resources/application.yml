@@ -67,3 +67,16 @@ toss:
     quote:
       # GET {price-path}?symbols=005930,AAPL (comma-separated, 최대 200개)
       price-path: ${TOSS_QUOTE_PRICE_PATH:/api/v1/prices}
+
+# ─────────────────────────────────────────────
+# 시세 적재 스케줄러 (TossQuoteClient → price_history 하이퍼테이블)
+#   1차: 삼성전자 1종목으로 스케줄링 파이프라인 동작 검증.
+#   enabled=false 로 두면 스케줄러 빈이 아예 생성되지 않는다.
+# ─────────────────────────────────────────────
+dipscore:
+  ingestion:
+    price:
+      enabled: ${PRICE_INGESTION_ENABLED:true}
+      symbols: ${PRICE_INGESTION_SYMBOLS:005930}
+      interval-ms: ${PRICE_INGESTION_INTERVAL_MS:60000}
+      initial-delay-ms: ${PRICE_INGESTION_INITIAL_DELAY_MS:10000}

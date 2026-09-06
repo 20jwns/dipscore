@@ -54,10 +54,38 @@ curl localhost:8080/api/quotes/005930   # 토스증권 시세 (자격증명 필�
 허용 IP 관리에서 현재 발신 IP(사무실/집 공인 IP, 또는 배포 서버 IP)를 등록해야 토큰 발급이 통과한다.
 401 이면 `client_id`/`client_secret` 오타를 먼저 의심할 것.
 
+## DB 스키마 (Flyway, `src/main/resources/db/migration`)
+
+`ddl-auto: validate` — 스키마는 마이그레이션으로만 관리하고 JPA 엔티티는 검증만 한다.
+
+| 마이그레이션 | 내용 |
+|---|---|
+| `V1__init.sql` | TimescaleDB 확장 활성화 |
+| `V2__instrument_and_price_history.sql` | `instrument`(종목 마스터) + `price_history`(시세, 하이퍼테이블) + 삼성전자 시드 |
+
+- **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency` — 엔티티 `marketdata.instrument.Instrument`
+- **`price_history`**: PK `(symbol, ts)`, `ts` 기준 하이퍼테이블(청크 7일), OHLCV(`open/high/low/volume` 은 nullable), `close` NOT NULL, `source` 출처 태그, `instrument` 로 FK — 엔티티 `marketdata.price.PriceHistory` (복합키 `PriceHistoryId`)
+  - 현재 적재기는 토스 `/api/v1/prices` 의 현재가만 얻으므로 `close` 만 채운다. 정규 분봉/일봉 소스 연동 시 같은 테이블에 전체 필드 적재.
+
+## 시세 적재 스케줄러
+
+`marketdata.ingestion.PriceIngestionJob` — `@Scheduled` 로 주기 실행, `TossQuoteClient.getQuotes()` →
+`price_history` upsert(`ON CONFLICT (symbol, ts) DO UPDATE`). 토스 조회 실패는 삼켜서 다음 주기 재시도.
+
+```yaml
+dipscore.ingestion.price:
+  enabled: true          # false 면 스케줄러 빈 자체가 안 뜸 (테스트 컨텍스트가 이 상태 → 외부 호출 없음)
+  symbols: 005930        # comma-separated, 최대 200
+  interval-ms: 60000
+  initial-delay-ms: 10000
+```
+
+로그: `[price-ingestion] N건 저장 (요청 M종목: [...])` / 실패 시 `... 토스 시세 조회 실패, 이번 주기 건너뜀: ...`
+
 ## 빌드 / 테스트
 
 ```bash
-./gradlew build      # 테스트 포함, DB 없이도 통과 (테스트 스코프에서 DB 자동설정 제외)
+./gradlew build      # 테스트 포함, DB 없이도 통과 (테스트 스코프에서 DB 자동설정 + 스케줄러 제외)
 ```
 
 ## DB 접속 정보 (기본값, 환경변수로 오버라이드)
@@ -67,5 +95,3 @@ curl localhost:8080/api/quotes/005930   # 토스증권 시세 (자격증명 필�
 | `DB_URL` | `jdbc:postgresql://localhost:5432/dipscore` |
 | `DB_USERNAME` | `dipscore` |
 | `DB_PASSWORD` | `dipscore` |
-
-마이그레이션은 Flyway (`src/main/resources/db/migration`). `V1__init.sql` 은 TimescaleDB 확장 활성화만 수행한다.
