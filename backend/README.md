@@ -54,6 +54,22 @@ curl localhost:8080/api/quotes/005930   # 토스증권 시세 (자격증명 필�
 허용 IP 관리에서 현재 발신 IP(사무실/집 공인 IP, 또는 배포 서버 IP)를 등록해야 토큰 발급이 통과한다.
 401 이면 `client_id`/`client_secret` 오타를 먼저 의심할 것.
 
+## DART 전자공시 오픈API 연동 구조
+
+토스와 같은 패턴. 인증만 다르다 — OAuth 가 아니라 쿼리 파라미터 `crtfc_key` (`DartApiKeyInterceptor` 가
+모든 요청에 자동 주입). 키는 `backend/.env` 의 `DART_API_KEY` (opendart.fss.or.kr 가입 후 즉시 발급, 40자리).
+
+| 구성요소 | 위치 | 역할 |
+|---|---|---|
+| `DartApiProperties` / `DartApiConfig` | `external/dart` | `dart.api.*` 바인딩, `dartRestClient` 빈(`crtfc_key` 자동주입) |
+| `DartCompanyClient` | `external/dart/company` | 기업개황 `GET /api/company.json?corp_code=` |
+| `DartFinancialsClient` | `external/dart/financials` | 단일회사 전체 재무제표 `GET /api/fnlttSinglAcntAll.json` (`bsns_year`, `reprt_code`, `fs_div`) |
+| `DartCorpCodeClient` | `external/dart/corpcode` | 고유번호 `GET /api/corpCode.xml` → ZIP(CORPCODE.xml) 다운로드·StAX 파싱, `findByStockCode()` |
+
+- 응답 `status != "000"` 및 키 누락 → `DartApiException` → `DartApiExceptionHandler` 가 **502**(`dart_api_error`)로 변환 (토스와 동일).
+- 고유번호 파일은 매 호출 수 MB 다운로드+파싱 → 실제로는 캐시/DB 적재해야 함 (`DartCorpCodeClient` TODO).
+- 스모크 엔드포인트: `GET /api/financials/{corpCode}?year=&reprtCode=&fsDiv=`, `GET /api/dart/company/{corpCode}`, `GET /api/dart/corp-code/{stockCode}` (예: `005930` → `00126380`).
+
 ## DB 스키마 (Flyway, `src/main/resources/db/migration`)
 
 `ddl-auto: validate` — 스키마는 마이그레이션으로만 관리하고 JPA 엔티티는 검증만 한다.
@@ -62,8 +78,9 @@ curl localhost:8080/api/quotes/005930   # 토스증권 시세 (자격증명 필�
 |---|---|
 | `V1__init.sql` | TimescaleDB 확장 활성화 |
 | `V2__instrument_and_price_history.sql` | `instrument`(종목 마스터) + `price_history`(시세, 하이퍼테이블) + 삼성전자 시드 |
+| `V3__instrument_corp_code.sql` | `instrument.corp_code`(DART 고유번호) 컬럼 + unique 인덱스 + 삼성전자 `00126380` 매핑 |
 
-- **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency` — 엔티티 `marketdata.instrument.Instrument`
+- **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique) — 엔티티 `marketdata.instrument.Instrument`
 - **`price_history`**: PK `(symbol, ts)`, `ts` 기준 하이퍼테이블(청크 7일), OHLCV(`open/high/low/volume` 은 nullable), `close` NOT NULL, `source` 출처 태그, `instrument` 로 FK — 엔티티 `marketdata.price.PriceHistory` (복합키 `PriceHistoryId`)
   - 현재 적재기는 토스 `/api/v1/prices` 의 현재가만 얻으므로 `close` 만 채운다. 정규 분봉/일봉 소스 연동 시 같은 테이블에 전체 필드 적재.
 

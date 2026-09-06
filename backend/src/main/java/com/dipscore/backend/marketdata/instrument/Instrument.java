@@ -41,6 +41,10 @@ public class Instrument {
     @Column(name = "currency", length = 3, nullable = false)
     private String currency;
 
+    /** DART 공시대상회사 고유번호 (opendart corp_code, 8자리). 국내 종목만, 미상장/해외는 null. */
+    @Column(name = "corp_code", length = 8)
+    private String corpCode;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -72,6 +76,10 @@ public class Instrument {
 
     public String getCurrency() {
         return currency;
+    }
+
+    public String getCorpCode() {
+        return corpCode;
     }
 
     public Instant getCreatedAt() {

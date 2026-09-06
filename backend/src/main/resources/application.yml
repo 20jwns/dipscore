@@ -69,6 +69,22 @@ toss:
       price-path: ${TOSS_QUOTE_PRICE_PATH:/api/v1/prices}
 
 # ─────────────────────────────────────────────
+# DART 전자공시 오픈API (opendart.fss.or.kr)
+#   인증키는 커밋 금지. backend/.env 의 DART_API_KEY 로 주입 (opendart 에서 발급, 40자리).
+#   DART 는 OAuth 가 아니라 쿼리 파라미터 crtfc_key 로 인증한다.
+#   base-url / *-path 는 opendart 공개 스펙 기준 (2026-09 확인).
+# ─────────────────────────────────────────────
+dart:
+  api:
+    api-key: ${DART_API_KEY:}
+    base-url: ${DART_API_BASE_URL:https://opendart.fss.or.kr}
+    connect-timeout: ${DART_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${DART_API_READ_TIMEOUT:10s}
+    company-path: ${DART_API_COMPANY_PATH:/api/company.json}
+    financials-path: ${DART_API_FINANCIALS_PATH:/api/fnlttSinglAcntAll.json}
+    corp-code-path: ${DART_API_CORP_CODE_PATH:/api/corpCode.xml}
+
+# ─────────────────────────────────────────────
 # 시세 적재 스케줄러 (TossQuoteClient → price_history 하이퍼테이블)
 #   1차: 삼성전자 1종목으로 스케줄링 파이프라인 동작 검증.
 #   enabled=false 로 두면 스케줄러 빈이 아예 생성되지 않는다.
