@@ -85,6 +85,29 @@ dart:
     corp-code-path: ${DART_API_CORP_CODE_PATH:/api/corpCode.xml}
 
 # ─────────────────────────────────────────────
+# 한국은행 ECOS 오픈API (ecos.bok.or.kr/api)
+#   인증키는 커밋 금지. backend/.env 의 ECOS_API_KEY 로 주입. 인증키는 URL 경로 세그먼트로 전달된다.
+#   통계표/항목 코드는 2026-09 ECOS 실데이터로 검증한 값 (StatisticSearch).
+# ─────────────────────────────────────────────
+ecos:
+  api:
+    api-key: ${ECOS_API_KEY:}
+    base-url: ${ECOS_API_BASE_URL:https://ecos.bok.or.kr}
+    language: ${ECOS_API_LANGUAGE:kr}
+    statistic-search-path: ${ECOS_API_STAT_SEARCH_PATH:/api/StatisticSearch}
+    connect-timeout: ${ECOS_API_CONNECT_TIMEOUT:3s}
+    read-timeout: ${ECOS_API_READ_TIMEOUT:10s}
+    # 정식 인증키는 최대 100000, sample 키로 시험할 땐 10 이하로.
+    max-rows: ${ECOS_API_MAX_ROWS:100}
+    indicators:
+      # 기준금리: 722Y001 / 0101000 / 월 (연%)
+      base-rate:     { stat-code: "722Y001", item-code: "0101000", cycle: "M" }
+      # 원/달러 매매기준율: 731Y001 / 0000001 / 일 (원)
+      exchange-rate: { stat-code: "731Y001", item-code: "0000001", cycle: "D" }
+      # 소비자물가지수 총지수: 901Y009 / 0 / 월 (2020=100)
+      cpi:           { stat-code: "901Y009", item-code: "0",       cycle: "M" }
+
+# ─────────────────────────────────────────────
 # 시세 적재 스케줄러 (TossQuoteClient → price_history 하이퍼테이블)
 #   1차: 삼성전자 1종목으로 스케줄링 파이프라인 동작 검증.
 #   enabled=false 로 두면 스케줄러 빈이 아예 생성되지 않는다.

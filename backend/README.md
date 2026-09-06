@@ -70,6 +70,25 @@ curl localhost:8080/api/quotes/005930   # 토스증권 시세 (자격증명 필�
 - 고유번호 파일은 매 호출 수 MB 다운로드+파싱 → 실제로는 캐시/DB 적재해야 함 (`DartCorpCodeClient` TODO).
 - 스모크 엔드포인트: `GET /api/financials/{corpCode}?year=&reprtCode=&fsDiv=`, `GET /api/dart/company/{corpCode}`, `GET /api/dart/corp-code/{stockCode}` (예: `005930` → `00126380`).
 
+## 한국은행 ECOS 오픈API 연동 구조
+
+토스/DART 와 같은 패턴. 인증키는 **URL 경로 세그먼트**로 전달되므로 인증 인터셉터는 없다.
+키는 `backend/.env` 의 `ECOS_API_KEY` (ecos.bok.or.kr/api 발급). 시험용 공개키 `sample` 은 1회 10건 제한.
+
+`external/ecos` 의 `EcosStatisticClient` — `GET /api/StatisticSearch/{KEY}/json/{lang}/1/{maxRows}/{statCode}/{cycle}/{startTime}/{endTime}/{itemCode}`.
+ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자열로 받아 `ObjectMapper` 로 파싱.
+`latest*()` 는 최근 창을 조회해 `TIME` 최대 행을 고른다.
+
+| 지표 | 통계표코드 / 항목코드 / 주기 | 단위 | 스모크 |
+|---|---|---|---|
+| 기준금리 | `722Y001` / `0101000` / `M` | 연% | `GET /api/ecos/base-rate` |
+| 원/달러 매매기준율 | `731Y001` / `0000001` / `D` | 원 | `GET /api/ecos/exchange-rate` |
+| 소비자물가지수(총지수) | `901Y009` / `0` / `M` | 2020=100 | `GET /api/ecos/cpi` |
+
+코드는 2026-09 ECOS 실데이터로 검증. `application.yml` 의 `ecos.api.indicators.*` 로 교체 가능.
+정상 응답은 `{"StatisticSearch":{"row":[...]}}`, 오류는 `{"RESULT":{"CODE":"INFO-200",...}}` →
+`EcosApiException` → `EcosApiExceptionHandler` 가 **502**(`ecos_api_error`).
+
 ## DB 스키마 (Flyway, `src/main/resources/db/migration`)
 
 `ddl-auto: validate` — 스키마는 마이그레이션으로만 관리하고 JPA 엔티티는 검증만 한다.
