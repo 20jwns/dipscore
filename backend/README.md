@@ -98,10 +98,35 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 | `V1__init.sql` | TimescaleDB 확장 활성화 |
 | `V2__instrument_and_price_history.sql` | `instrument`(종목 마스터) + `price_history`(시세, 하이퍼테이블) + 삼성전자 시드 |
 | `V3__instrument_corp_code.sql` | `instrument.corp_code`(DART 고유번호) 컬럼 + unique 인덱스 + 삼성전자 `00126380` 매핑 |
+| `V4__attractiveness_base_score.sql` | `financial_snapshot` + `macro_indicator`(하이퍼테이블) + `attractiveness_score` + 반도체 peer(삼성전자·SK하이닉스·한미반도체) 시드 |
 
 - **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique) — 엔티티 `marketdata.instrument.Instrument`
 - **`price_history`**: PK `(symbol, ts)`, `ts` 기준 하이퍼테이블(청크 7일), OHLCV(`open/high/low/volume` 은 nullable), `close` NOT NULL, `source` 출처 태그, `instrument` 로 FK — 엔티티 `marketdata.price.PriceHistory` (복합키 `PriceHistoryId`)
   - 현재 적재기는 토스 `/api/v1/prices` 의 현재가만 얻으므로 `close` 만 채운다. 정규 분봉/일봉 소스 연동 시 같은 테이블에 전체 필드 적재.
+- **`financial_snapshot`**: PK `(symbol, fiscal_year, fs_div)`, DART 재무제표를 소화한 핵심 계정(매출/영업이익/순이익/자본총계/부채총계/전기매출/발행주식수), **금액 단위 백만원** — 엔티티 `marketdata.financial.FinancialSnapshot`
+- **`macro_indicator`**: PK `(indicator_code, ts)`, `ts` 하이퍼테이블. 거시지표 시계열(BASE_RATE/USD_KRW…), Z-score 분포 창 — 엔티티 `marketdata.macro.MacroIndicator`
+- **`attractiveness_score`**: PK `(symbol, as_of)`, `base_score`·`event_coefficient`·`attractiveness` + `factor_breakdown`(JSON, 요인별 raw/정규화/가중) — 엔티티 `attractiveness.persistence.AttractivenessScore`
+
+## 매력도 지수 "기본점수" 엔진 (기획서 4장)
+
+```
+기본점수 = 100 × Σ(가중치_i × 정규화_i) / Σ(가중치_i)      (가중치는 application.yml, 합≠1 허용)
+매력도 지수 = 기본점수 × 이벤트 조정계수                    (조정계수 현재 1.0 고정 - 기획서 4-5 미구현, TODO)
+```
+
+1차 핵심 요인 7개 (`attractiveness.Factor`):
+
+| 요인 | 종류 | 정규화 | 방향 |
+|---|---|---|---|
+| PER · PBR · 부채비율 | FUNDAMENTAL | 업종(`instrument.industry`) percentile | 낮을수록 유리 |
+| ROE · 매출성장률 | FUNDAMENTAL | 업종 percentile | 높을수록 유리 |
+| 기준금리 · 원/달러환율 | MACRO | Z-score(`0.5·(1+tanh(z/2))`) | 낮을수록 유리(잠정) |
+
+- 순수 계산: `attractiveness.BaseScoreEngine`(DB 비의존) + `PercentileNormalizer` / `ZScoreNormalizer` / `FundamentalMetricsCalculator`
+- 저장소 연동: `attractiveness.BaseScoreService`(`@ConditionalOnProperty attractiveness.enabled`) — 재무 스냅샷·시세·거시데이터 로딩 → 계산 → `attractiveness_score` 저장
+- 적재 스켈레톤: `attractiveness.ingest.DartFinancialSnapshotIngestionService`(DART→`financial_snapshot`, 계정 매칭·주식수는 TODO), `MacroIndicatorRefreshService`(ECOS→`macro_indicator`)
+- 스모크: `POST /api/attractiveness/{symbol}` → 계산·저장. 삼성전자(FY2024, peer=SK하이닉스·한미반도체) **기본점수 ≈ 47.0/100** (부채비율만 유리, ROE·성장 열위 → 60점 매수임계 미달)
+- 가중치는 `application.yml` `attractiveness.weights.*` (전문가 초안, 기획서 4-4 4단계 방법론으로 확정 예정)
 
 ## 시세 적재 스케줄러
 

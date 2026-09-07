@@ -119,3 +119,24 @@ dipscore:
       symbols: ${PRICE_INGESTION_SYMBOLS:005930}
       interval-ms: ${PRICE_INGESTION_INTERVAL_MS:60000}
       initial-delay-ms: ${PRICE_INGESTION_INITIAL_DELAY_MS:10000}
+
+# ─────────────────────────────────────────────
+# 매력도 지수 "기본점수" 엔진 (기획서 4장)
+#   가중치는 하드코딩 금지 → 여기서 주입. 현재는 전문가 초안, 4단계 방법론(4-4)으로 확정 예정.
+#   합이 1이 아니어도 됨 (엔진이 정규화). 가중치 0 이면 요인 제외.
+#   enabled=false 면 DB 의존 빈(BaseScoreService/컨트롤러/적재서비스) 미생성.
+# ─────────────────────────────────────────────
+attractiveness:
+  enabled: ${ATTRACTIVENESS_ENABLED:true}
+  engine-version: base-v1
+  target-fiscal-year: ${ATTRACTIVENESS_FISCAL_YEAR:2024}
+  fs-div: CFS
+  macro-zscore-window: 24
+  weights:
+    per: 0.20
+    pbr: 0.15
+    debt-to-equity: 0.15
+    roe: 0.20
+    revenue-growth: 0.15
+    base-rate: 0.075
+    usd-krw: 0.075
