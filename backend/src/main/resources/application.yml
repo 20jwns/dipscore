@@ -152,3 +152,29 @@ backfill:
     symbols: ${BACKFILL_PRICES_SYMBOLS:005930,000660,042700}
     days: ${BACKFILL_PRICES_DAYS:365}
     request-delay-ms: ${BACKFILL_PRICES_DELAY_MS:300}
+
+# ─────────────────────────────────────────────
+# 저점 진입 스코어 엔진 (기획서 5장)
+#   저점 진입 스코어 = (반등신호 × A) + (기술적지표 × B) + (매력도지수 × C)
+#   가중치 A/B/C 와 지표 파라미터는 하드코딩 금지 → 여기서 주입 (초안, 4단계 방법론으로 확정 예정).
+#   enabled=false 면 DB 의존 빈(EntryScoreService/컨트롤러) 미생성.
+# ─────────────────────────────────────────────
+entry-score:
+  enabled: ${ENTRY_SCORE_ENABLED:true}
+  engine-version: entry-v1
+  weights:
+    rebound-signal: 0.3          # A
+    technical-indicator: 0.3     # B
+    attractiveness: 0.4          # C
+  atr-period: 14
+  rsi-period: 14
+  rsi-oversold: 30
+  bollinger-period: 20
+  bollinger-k: 2.0
+  recent-window: 10             # "최근 N봉 안에 과매도/하단터치" 판정 창
+  rebound-lookback: 20          # 반등신호 기준 고점 계산 창
+  rebound-band-low-multiple: 0.5   # <0.5×ATR: 램프업
+  rebound-band-high-multiple: 1.5  # 0.5~1.5×ATR: plateau(최고점)
+  rebound-band-far-multiple: 3.0   # 1.5~3.0×ATR: 램프다운, ≥3.0: 0
+  attractiveness-min-base-score: 60   # 1차 필터 (미통과 → entry_score=0)
+  entry-threshold: 70                 # 진입 임계값 (참고/로그용, 백테스트로 조정)

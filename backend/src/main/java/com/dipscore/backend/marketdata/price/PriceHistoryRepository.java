@@ -48,4 +48,7 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Pric
                      @Param("source") String source);
 
     List<PriceHistory> findBySymbolOrderByTsDesc(String symbol);
+
+    /** full OHLC 를 가진 일봉만 시간 오름차순 (스냅샷/close-only 행 제외). 지표 계산용. */
+    List<PriceHistory> findBySymbolAndOpenNotNullOrderByTsAsc(String symbol);
 }

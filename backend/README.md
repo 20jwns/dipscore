@@ -99,6 +99,7 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 | `V2__instrument_and_price_history.sql` | `instrument`(종목 마스터) + `price_history`(시세, 하이퍼테이블) + 삼성전자 시드 |
 | `V3__instrument_corp_code.sql` | `instrument.corp_code`(DART 고유번호) 컬럼 + unique 인덱스 + 삼성전자 `00126380` 매핑 |
 | `V4__attractiveness_base_score.sql` | `financial_snapshot` + `macro_indicator`(하이퍼테이블) + `attractiveness_score` + 반도체 peer(삼성전자·SK하이닉스·한미반도체) 시드 |
+| `V5__entry_score.sql` | `entry_score`(저점 진입 스코어 계산 결과) |
 
 - **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique) — 엔티티 `marketdata.instrument.Instrument`
 - **`price_history`**: PK `(symbol, ts)`, `ts` 기준 하이퍼테이블(청크 7일), OHLCV(`open/high/low/volume` 은 nullable), `close` NOT NULL, `source` 출처 태그, `instrument` 로 FK — 엔티티 `marketdata.price.PriceHistory` (복합키 `PriceHistoryId`)
@@ -106,6 +107,7 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 - **`financial_snapshot`**: PK `(symbol, fiscal_year, fs_div)`, DART 재무제표를 소화한 핵심 계정(매출/영업이익/순이익/자본총계/부채총계/전기매출/발행주식수), **금액 단위 백만원** — 엔티티 `marketdata.financial.FinancialSnapshot`
 - **`macro_indicator`**: PK `(indicator_code, ts)`, `ts` 하이퍼테이블. 거시지표 시계열(BASE_RATE/USD_KRW…), Z-score 분포 창 — 엔티티 `marketdata.macro.MacroIndicator`
 - **`attractiveness_score`**: PK `(symbol, as_of)`, `base_score`·`event_coefficient`·`attractiveness` + `factor_breakdown`(JSON, 요인별 raw/정규화/가중) — 엔티티 `attractiveness.persistence.AttractivenessScore`
+- **`entry_score`**: PK `(symbol, as_of)`, `rebound_signal`·`technical_indicator`·`attractiveness_component`(각 0~1) + `entry_score`(0~100) + `filter_passed` + `factor_breakdown`(JSON) — 엔티티 `entryscore.persistence.EntryScore`
 
 ## 매력도 지수 "기본점수" 엔진 (기획서 4장)
 
@@ -127,6 +129,24 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 - 적재 스켈레톤: `attractiveness.ingest.DartFinancialSnapshotIngestionService`(DART→`financial_snapshot`, 계정 매칭·주식수는 TODO), `MacroIndicatorRefreshService`(ECOS→`macro_indicator`)
 - 스모크: `POST /api/attractiveness/{symbol}` → 계산·저장. 삼성전자(FY2024, peer=SK하이닉스·한미반도체) **기본점수 ≈ 47.0/100** (부채비율만 유리, ROE·성장 열위 → 60점 매수임계 미달)
 - 가중치는 `application.yml` `attractiveness.weights.*` (전문가 초안, 기획서 4-4 4단계 방법론으로 확정 예정)
+
+## 저점 진입 스코어 엔진 (기획서 5장)
+
+```
+저점 진입 스코어 = 100 × [ (반등신호 × A) + (기술적지표 × B) + (매력도지수 × C) ] / (A+B+C)
+                  단, 매력도 1차 필터(base_score ≥ 60) 미통과면 0
+```
+
+| 구성요소 | 계산 | 정규화 |
+|---|---|---|
+| 반등신호 (A) | 최근 `rebound-lookback`봉 고점 대비 낙폭 ÷ ATR(14) | 0.5~1.5×ATR 구간 plateau=1.0, 밖으로 램프다운 (`reboundNormalize`) |
+| 기술적지표 (B) | RSI(14) 과매도(≤30) 후 상향돌파 + 볼린저(20,2σ) 하단 터치 후 복귀 두 서브점수 **평균** | 각 0~1 |
+| 매력도지수 (C) | 최신 `attractiveness_score.base_score` / 100 | 0~1. base_score ≥ 60 이 1차 필터 |
+
+- 순수 계산: `entryscore.EntryScoreEngine`(DB 비의존) + `TechnicalIndicatorCalculator`(Wilder ATR/RSI, Bollinger %b)
+- 저장소 연동: `entryscore.EntryScoreService`(`@ConditionalOnProperty entry-score.enabled`) — 일봉 시세(`price_history` OHLC 만) + 최신 매력도 점수 로딩 → 계산 → `entry_score` 저장. 매력도 점수 없으면 422 (먼저 `POST /api/attractiveness/{symbol}`).
+- 가중치 A/B/C·지표 파라미터는 `application.yml` `entry-score.*` (초안 0.3/0.3/0.4, 하드코딩 금지 — 기획서 5-3 4단계 방법론으로 확정 예정). `entry-threshold` 70 은 참고/로그용.
+- 스모크: `POST /api/entry-score/{symbol}`. 3종목(005930/000660/042700) 실측: 매력도 기본점수 58.7/48.7/53.7 로 **셋 다 1차 필터 미통과 → entry_score 0** (반등신호 1.00/0.07/0.78, 기술적지표는 셋 다 0 — 현재 과매도·하단터치 없음). 필터 임계를 45 로 낮추면 53.5/21.7/44.7 (모두 진입임계 70 미달).
 
 ## 시세 적재 스케줄러
 
