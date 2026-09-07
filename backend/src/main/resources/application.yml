@@ -140,3 +140,15 @@ attractiveness:
     revenue-growth: 0.15
     base-rate: 0.075
     usd-krw: 0.075
+
+# ─────────────────────────────────────────────
+# 과거 시세 백필 (토스 일봉 캔들 GET /api/v1/candles)
+#   enabled=true 여도 자동 실행 안 함 — POST /api/admin/price-backfill 로만 수동 트리거.
+#   스케줄러(dipscore.ingestion.price)와 별개.
+# ─────────────────────────────────────────────
+backfill:
+  prices:
+    enabled: ${BACKFILL_PRICES_ENABLED:true}
+    symbols: ${BACKFILL_PRICES_SYMBOLS:005930,000660,042700}
+    days: ${BACKFILL_PRICES_DAYS:365}
+    request-delay-ms: ${BACKFILL_PRICES_DELAY_MS:300}

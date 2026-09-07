@@ -143,6 +143,26 @@ dipscore.ingestion.price:
 
 로그: `[price-ingestion] N건 저장 (요청 M종목: [...])` / 실패 시 `... 토스 시세 조회 실패, 이번 주기 건너뜀: ...`
 
+## 과거 시세 백필 (일봉 캔들)
+
+토스 `GET /api/v1/candles`(`symbol`, `interval=1d`, `count≤200`, `before` 페이지네이션, `nextBefore` 응답 —
+[공개 스펙](https://openapi.tossinvest.com/openapi-docs/latest/openapi.json), 2026-09 확인)로 `price_history` 를
+과거로 채운다. `TossCandleClient` → `PriceBackfillService`(종목별 페이지네이션·cutoff·딜레이) →
+`PriceHistoryBackfillWriter`(종목 단위 트랜잭션, `upsertOhlcv` 로 **OHLCV 전체** 채움, `source=TOSS_CANDLE_1D`).
+
+- **수동 트리거만**: `POST /api/admin/price-backfill` — 스케줄러와 무관, 앱 기동 시 자동 실행 안 함.
+  파라미터 없으면 설정 기본값(3종목, 365일). `?symbols=005930,000660&days=90` 로 지정 가능.
+- 종목별 로그: `[price-backfill] 005930: N건 적재 (기간 <최초> ~ <최근>)`
+- rate limit(`MARKET_DATA_CHART`) 대비: 페이지 간·종목 간 `request-delay-ms`(기본 300ms) 딜레이.
+
+```yaml
+backfill.prices:
+  enabled: true          # false/미설정 → 엔드포인트·서비스 빈 미생성 (테스트 컨텍스트가 이 상태)
+  symbols: 005930,000660,042700
+  days: 365               # ≈ 250 영업일. 365일 → 종목당 ~243봉, 2페이지
+  request-delay-ms: 300
+```
+
 ## 빌드 / 테스트
 
 ```bash
