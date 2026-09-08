@@ -100,8 +100,9 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 | `V3__instrument_corp_code.sql` | `instrument.corp_code`(DART 고유번호) 컬럼 + unique 인덱스 + 삼성전자 `00126380` 매핑 |
 | `V4__attractiveness_base_score.sql` | `financial_snapshot` + `macro_indicator`(하이퍼테이블) + `attractiveness_score` + 반도체 peer(삼성전자·SK하이닉스·한미반도체) 시드 |
 | `V5__entry_score.sql` | `entry_score`(저점 진입 스코어 계산 결과) |
+| `V6__instrument_active.sql` | `instrument.active` BOOLEAN(soft-delete). 코넥스 등 유니버스 제외용 |
 
-- **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique) — 엔티티 `marketdata.instrument.Instrument`
+- **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique), `active`(soft-delete, 코넥스 등 제외) — 엔티티 `marketdata.instrument.Instrument`
 - **`price_history`**: PK `(symbol, ts)`, `ts` 기준 하이퍼테이블(청크 7일), OHLCV(`open/high/low/volume` 은 nullable), `close` NOT NULL, `source` 출처 태그, `instrument` 로 FK — 엔티티 `marketdata.price.PriceHistory` (복합키 `PriceHistoryId`)
   - 현재 적재기는 토스 `/api/v1/prices` 의 현재가만 얻으므로 `close` 만 채운다. 정규 분봉/일봉 소스 연동 시 같은 테이블에 전체 필드 적재.
 - **`financial_snapshot`**: PK `(symbol, fiscal_year, fs_div)`, DART 재무제표를 소화한 핵심 계정(매출/영업이익/순이익/자본총계/부채총계/전기매출/발행주식수), **금액 단위 백만원** — 엔티티 `marketdata.financial.FinancialSnapshot`
@@ -199,6 +200,38 @@ backfill.prices:
   symbols: 005930,000660,042700
   days: 365               # ≈ 250 영업일. 365일 → 종목당 ~243봉, 2페이지
   request-delay-ms: 300
+```
+
+## 종목 마스터 대량 채우기 (DART 고유번호)
+
+`DartCorpCodeClient.downloadAll()`(corpCode.xml, ~12만 회사) → 상장(`stockCode` 있음)만 필터 →
+`stockCode` 중복 제거 → (선택) corp_cls 분류 → `InstrumentSyncWriter`(청크 단위 트랜잭션)로 `instrument` upsert.
+
+- **수동 트리거만**: `POST /api/admin/instrument-sync` — 자동 실행 안 함.
+- `?symbols=086220,224810,005930` — 지정 종목코드만 대상 (소규모 검증·재동기화). 미지정 시 DART 상장 전체.
+- upsert(`InstrumentRepository.upsertFromDart`): `INSERT ... ON CONFLICT (symbol) DO UPDATE SET name, corp_code, active, updated_at` — **`name`·`corp_code`(·`active`) 만 갱신**.
+  `sector`/`industry`/`market_type`/`currency` 는 SET 절에 없어 **기존 값 유지** (반도체 3사 시드의 `sector=IT, industry=반도체` 안 지워짐). 신규는 `market_type=KR_STOCK` 고정.
+- 청크(기본 500) 하나가 실패해도 나머지 진행, `failed` 로 집계. 멱등(재실행 안전).
+
+**corp_cls 시장구분 필터** (`filter-by-corp-cls`, 기본 on. `?filterByCorpCls=false` 로 호출별 off):
+
+- 각 상장 종목을 `DartCompanyClient.getCompany(corpCode)` 로 조회해 `corp_cls` 확인.
+- `corp_cls='N'`(코넥스) → **삭제하지 않고 `instrument.active=false` 로 soft-delete** (V6, FK 자식행 보존·가역).
+  신규 코넥스는 `active=false` 로 insert, 기존 활성행은 `active=false` 로 flip. `Y`/`K`/`E`/불명/조회실패 → `active=true`.
+- 스코어링/랭킹 유니버스는 `active=true` 만 대상 (`findByIndustryAndActiveTrue`).
+- `konexDeactivated` = **실제로 `active=false` 로 DB 반영된 코넥스 건수** (청크 실패분 제외). "이번에 안 넣은 건수"가 아님.
+- rate limit: 호출 간 `company-lookup-delay-ms`(기본 100ms). `company-lookup-max-consecutive-failures`(기본 20)회 연속 실패 시 필터 **중단**(나머지는 활성 처리, `aborted=true`) — 일일 한도 소진 대비.
+- 3,989건 개별 호출 → **수십 분 소요**. 시작 시 경고 로그: `corp_cls 필터 ON — 상장 N건 … 최소 약 M분 소요 예상. DART 일일 요청 한도 소모에 유의.`
+- corp_cls off 실측(2026-09): DART 118,942사 → 상장 3,989 → 신규 3,986 / 갱신 3(시드 3사, `042700` corp_code `00161383` 채워짐) / 실패 0, ~18초.
+- corp_cls on 소규모 실측(2026-09, `?symbols=086220,224810,005930,247540`): 광동헬스바이오·엄지하우스(코넥스 `N`) → `active=false` flip, 삼성전자(`Y`)·에코프로비엠(`K`) → `active=true` 유지, `konexDeactivated=2`.
+
+```yaml
+instrument-sync:
+  enabled: true          # false/미설정 → 엔드포인트·서비스 빈 미생성
+  chunk-size: 500
+  filter-by-corp-cls: true            # 코넥스(N) → active=false. ?filterByCorpCls=false 로 끄면 수 초
+  company-lookup-delay-ms: 100
+  company-lookup-max-consecutive-failures: 20
 ```
 
 ## 빌드 / 테스트

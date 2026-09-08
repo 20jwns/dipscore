@@ -45,6 +45,10 @@ public class Instrument {
     @Column(name = "corp_code", length = 8)
     private String corpCode;
 
+    /** 활성 여부. false = 코넥스 등 유니버스 제외 (soft-delete). */
+    @Column(name = "active", nullable = false)
+    private boolean active;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -72,6 +76,10 @@ public class Instrument {
 
     public String getIndustry() {
         return industry;
+    }
+
+    public boolean isActive() {
+        return active;
     }
 
     public String getCurrency() {

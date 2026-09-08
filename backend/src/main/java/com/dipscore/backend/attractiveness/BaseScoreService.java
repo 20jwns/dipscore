@@ -94,7 +94,7 @@ public class BaseScoreService {
         BigDecimal targetClose = latestClose(symbol);
 
         // 업종 모집단: 같은 industry 의 종목들 중 해당 연도 스냅샷이 있는 것
-        List<String> peerSymbols = instrumentRepository.findByIndustry(industry).stream()
+        List<String> peerSymbols = instrumentRepository.findByIndustryAndActiveTrue(industry).stream()
                 .map(Instrument::getSymbol)
                 .toList();
         List<ValuationMetrics> industryMetrics = new ArrayList<>();
