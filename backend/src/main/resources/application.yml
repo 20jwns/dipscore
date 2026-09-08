@@ -178,3 +178,14 @@ entry-score:
   rebound-band-far-multiple: 3.0   # 1.5~3.0×ATR: 램프다운, ≥3.0: 0
   attractiveness-min-base-score: 60   # 1차 필터 (미통과 → entry_score=0)
   entry-threshold: 70                 # 진입 임계값 (참고/로그용, 백테스트로 조정)
+
+# ─────────────────────────────────────────────
+# 매매 신호 판정 (기획서 7-1). 현재 "매수 신호" 판정만 — 계좌/포지션 개념이 없어 매도 신호는 TODO.
+#   임계값은 entry-score.* 와 같은 값이나 매수 룰 고유 튜닝 대상이라 분리 (기획서 7-3).
+#   enabled=false 면 DB 의존 빈(TradingSignalService/컨트롤러) 미생성.
+# ─────────────────────────────────────────────
+signal:
+  enabled: ${SIGNAL_ENABLED:true}
+  entry-threshold: 70          # 저점진입스코어 ≥
+  min-base-score: 60           # 매력도 기본점수 ≥
+  event-coefficient-min: 0.9   # 이벤트조정계수 ≥ (음수 이벤트 없음). 현재 조정계수는 항상 1.0

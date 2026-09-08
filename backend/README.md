@@ -148,6 +148,24 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 - 가중치 A/B/C·지표 파라미터는 `application.yml` `entry-score.*` (초안 0.3/0.3/0.4, 하드코딩 금지 — 기획서 5-3 4단계 방법론으로 확정 예정). `entry-threshold` 70 은 참고/로그용.
 - 스모크: `POST /api/entry-score/{symbol}`. 3종목(005930/000660/042700) 실측: 매력도 기본점수 58.7/48.7/53.7 로 **셋 다 1차 필터 미통과 → entry_score 0** (반등신호 1.00/0.07/0.78, 기술적지표는 셋 다 0 — 현재 과매도·하단터치 없음). 필터 임계를 45 로 낮추면 53.5/21.7/44.7 (모두 진입임계 70 미달).
 
+## 매매 신호 판정 (기획서 7)
+
+`signal.TradingSignalService`(`@ConditionalOnProperty signal.enabled`) — **매수 신호 판정만** 구현.
+저장 없이 계산·반환. `GET /api/trading-signal/{symbol}` → `decision` `BUY`(매수신호)/`WAIT`(대기) + 조건별 상세.
+
+기획서 7-1 매수 룰:
+
+| 조건 | 소스 | 현재 상태 |
+|---|---|---|
+| 저점진입스코어 ≥ `signal.entry-threshold`(70) | 최신 `entry_score.entry_score` | 평가 |
+| 기본점수 ≥ `signal.min-base-score`(60) | 최신 `attractiveness_score.base_score` | 평가 |
+| 이벤트조정계수 ≥ `signal.event-coefficient-min`(0.9) | 최신 `attractiveness_score.event_coefficient` | 평가 (계수 항상 1.0 → 사실상 항상 통과, 기획서 4-5 TODO) |
+| 보유현금 > 최소매수단위 | — | **미평가**(`evaluated:false`) — 계좌/포지션 개념 없음, TODO |
+
+- 전제 데이터 없으면 422 (`entry_score` 없으면 `POST /api/entry-score/{symbol}` 먼저, `attractiveness_score` 없으면 `POST /api/attractiveness/{symbol}` 먼저).
+- **매도 신호(기획서 7-2, 목표수익률/손절/보유시간)는 이번 범위 밖** — 포지션(진입가·진입시각·수량) 개념 필요, `TradingSignalService` 클래스 주석에 TODO.
+- 스모크: 3종목 모두 매력도 기본점수 < 60 (58.7/48.7/53.7) 이고 entry_score 0 → **셋 다 `WAIT`**(저점진입스코어·기본점수 조건 미충족). `conditions` 배열에 조건별 actual/threshold/pass 표시.
+
 ## 시세 적재 스케줄러
 
 `marketdata.ingestion.PriceIngestionJob` — `@Scheduled` 로 주기 실행, `TossQuoteClient.getQuotes()` →
