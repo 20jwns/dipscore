@@ -154,6 +154,18 @@ backfill:
     request-delay-ms: ${BACKFILL_PRICES_DELAY_MS:300}
 
 # ─────────────────────────────────────────────
+# 일별 배치 (장 마감 후 실행)
+#   daily-batch.symbols 는 여러 일별 배치가 공유하는 대상 종목.
+#   daily-candle: 대상 종목의 최신 일봉 1건을 price_history 에 append (TossCandleClient, upsert).
+#     enabled=false 면 스케줄러/컨트롤러/writer 빈 미생성. 수동 트리거: POST /api/admin/daily-candle-sync
+# ─────────────────────────────────────────────
+daily-batch:
+  symbols: ${DAILY_BATCH_SYMBOLS:005930,000660,042700}
+  daily-candle:
+    enabled: ${DAILY_CANDLE_SYNC_ENABLED:true}
+    cron: ${DAILY_CANDLE_SYNC_CRON:0 0 16 * * MON-FRI}   # Asia/Seoul, 장 마감(15:30) 후
+
+# ─────────────────────────────────────────────
 # 저점 진입 스코어 엔진 (기획서 5장)
 #   저점 진입 스코어 = (반등신호 × A) + (기술적지표 × B) + (매력도지수 × C)
 #   가중치 A/B/C 와 지표 파라미터는 하드코딩 금지 → 여기서 주입 (초안, 4단계 방법론으로 확정 예정).

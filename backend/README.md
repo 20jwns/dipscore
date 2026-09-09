@@ -202,6 +202,27 @@ backfill.prices:
   request-delay-ms: 300
 ```
 
+## 일별 배치 — 최신 일봉 적재 (`daily-candle-sync`)
+
+장 마감 후 대상 종목의 **최신 일봉 1건**을 `price_history` 에 append 한다.
+`marketdata.dailybatch.DailyCandleSyncJob` — `PriceIngestionJob` 과 같은 스케줄러 패턴
+(`@Scheduled(cron, zone="Asia/Seoul")` + `@ConditionalOnProperty`), `TossCandleClient.getDailyCandles(count=1)` →
+`DailyCandleSyncWriter`(종목 단위 트랜잭션, `upsertOhlcv`, `source=TOSS_CANDLE_1D` — 백필과 동일).
+
+- `daily-batch.symbols` 는 **여러 일별 배치가 공유**하는 대상 종목 (이 잡 전용 아님).
+- 한 종목 조회/적재 실패는 삼키고 다음 종목 계속. 실행 결과 로그: `[daily-candle-sync] 완료: N종목 중 성공 x / 실패 y`.
+- **수동 트리거**: `POST /api/admin/daily-candle-sync` (스케줄과 별개로 즉시 1회). `?symbols=005930,000660` 로 대상 지정 가능.
+  응답: `{ requested, succeeded, failed, results:[{symbol, ok, ts, close, error}] }`.
+- 소규모 실측(2026-09, 3종목): 성공 3/3, `?symbols=005930,999999` → 성공 1 / 실패 1(존재 안 하는 종목 `HTTP 404` 를 error 로 집계, 나머지 계속).
+
+```yaml
+daily-batch:
+  symbols: 005930,000660,042700   # 공유 대상 종목
+  daily-candle:
+    enabled: true                 # false/미설정 → 스케줄러·컨트롤러·writer 빈 미생성 (테스트 컨텍스트가 이 상태)
+    cron: "0 0 16 * * MON-FRI"     # Asia/Seoul — 평일 16:00, 장 마감(15:30) 후
+```
+
 ## 종목 마스터 대량 채우기 (DART 고유번호)
 
 `DartCorpCodeClient.downloadAll()`(corpCode.xml, ~12만 회사) → 상장(`stockCode` 있음)만 필터 →
