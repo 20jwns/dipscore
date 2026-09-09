@@ -228,6 +228,31 @@ daily-batch:
     cron: "0 0 16 * * MON-FRI"     # Asia/Seoul — 평일 16:00, 장 마감(15:30) 후
 ```
 
+## 일별 배치 — 장 시작 전 스코어링 (`daily-scoring`)
+
+평일 장 시작 전 `daily-batch.symbols` 대상 종목의 **매력도 지수 → 저점 진입 스코어** 를 순서대로 계산·저장한다.
+`marketdata.dailybatch.DailyScoringJob` — `BaseScoreService.computeAndSave` → `EntryScoreService.computeAndSave` 를
+종목마다 이어서 호출.
+
+- **스케줄**: 기본 `0 30 8 * * MON-FRI` (평일 08:30 Asia/Seoul) — 다른 배치(재무 03시 / instrument 04시 / 거시 06시)
+  종료 후, 장 시작(09:00) 전. 전날 종가 기준 신호 생성.
+- 종목별 독립 — 매력도 실패 시 그 종목의 저점진입은 건너뛰고(`ATTRACTIVENESS_FAILED`) 다음 종목 계속.
+  매력도는 OK인데 저점진입만 실패하면 `ENTRY_SCORE_FAILED` (매력도 점수는 이미 저장됨).
+- 실행 결과 로그: `[daily-scoring] 완료: N종목 중 성공 x / 실패 y`, 실패분은 `[daily-scoring] 실패 y종목 사유: <symbol=err; …>`.
+- **수동 트리거**: `POST /api/admin/daily-scoring` (`?symbols=005930,000660`).
+  응답: `{ requested, succeeded, failed, results:[{symbol, status, baseScore, entryScore, filterPassed, error}] }`
+  (status: `OK` / `ATTRACTIVENESS_FAILED` / `ENTRY_SCORE_FAILED`).
+- `attractiveness.enabled` + `entry-score.enabled` + `daily-batch.scoring.enabled` 가 모두 true 여야 빈 생성.
+- 실측(2026-09, 3종목): 성공 3/3 — 005930 매력도 51.95/진입 0(filter 미통과), 000660 66.95/49.39(통과), 042700 41.95/0.
+  `?symbols=005930,042700,999999` → 성공 2 / 실패 1(`999999` = `ATTRACTIVENESS_FAILED: 종목 없음`, 나머지 정상).
+
+```yaml
+daily-batch:
+  scoring:
+    enabled: true                     # + attractiveness.enabled + entry-score.enabled
+    cron: "0 30 8 * * MON-FRI"         # Asia/Seoul — 평일 08:30
+```
+
 ## 주간 배치 — 재무제표 적재 (`financial-snapshot-sync`)
 
 `daily-batch.symbols` 대상 종목의 최신 재무제표를 `financial_snapshot` 에 적재한다 (기본: 매주 월 03:00 Asia/Seoul).
