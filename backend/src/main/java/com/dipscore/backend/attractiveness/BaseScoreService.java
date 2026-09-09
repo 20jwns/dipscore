@@ -76,8 +76,8 @@ public class BaseScoreService {
 
     @Transactional
     public AttractivenessResult computeAndSave(String symbol) {
-        short fiscalYear = (short) props.targetFiscalYear();
         String fsDiv = props.fsDiv();
+        int pinnedYear = props.targetFiscalYear(); // 0 = 자동(최신 fiscal_year), >0 = 고정
 
         Instrument instrument = instrumentRepository.findById(symbol)
                 .orElseThrow(() -> new AttractivenessException("종목 없음: " + symbol));
@@ -86,10 +86,13 @@ public class BaseScoreService {
             throw new AttractivenessException("업종(industry) 미지정 종목이라 percentile 정규화 불가: " + symbol);
         }
 
-        FinancialSnapshot targetSnapshot = financialSnapshotRepository
-                .findBySymbolAndFiscalYearAndFsDiv(symbol, fiscalYear, fsDiv)
-                .orElseThrow(() -> new AttractivenessException(
-                        "재무 스냅샷 없음: %s FY%d %s".formatted(symbol, fiscalYear, fsDiv)));
+        FinancialSnapshot targetSnapshot = (pinnedYear > 0
+                ? financialSnapshotRepository.findBySymbolAndFiscalYearAndFsDiv(symbol, (short) pinnedYear, fsDiv)
+                : financialSnapshotRepository.findFirstBySymbolAndFsDivOrderByFiscalYearDesc(symbol, fsDiv))
+                .orElseThrow(() -> new AttractivenessException(pinnedYear > 0
+                        ? "재무 스냅샷 없음: %s FY%d %s".formatted(symbol, pinnedYear, fsDiv)
+                        : "재무 스냅샷 없음: %s %s (어느 회계연도에도)".formatted(symbol, fsDiv)));
+        short fiscalYear = targetSnapshot.getFiscalYear();
 
         BigDecimal targetClose = latestClose(symbol);
 

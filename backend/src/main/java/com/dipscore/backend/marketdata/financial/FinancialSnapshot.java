@@ -90,6 +90,12 @@ public class FinancialSnapshot {
         return s;
     }
 
+    /** 공시일(rcept_no 파싱 등)을 채워 반환. 적재 시점에만 사용. */
+    public FinancialSnapshot withDisclosedAt(LocalDate disclosedAt) {
+        this.disclosedAt = disclosedAt;
+        return this;
+    }
+
     public String getSymbol() {
         return symbol;
     }

@@ -18,8 +18,8 @@ public record AttractivenessProperties(
 
         @DefaultValue("base-v1") String engineVersion,
 
-        /** 재무 스냅샷 조회 기준 회계연도. */
-        @DefaultValue("2024") int targetFiscalYear,
+        /** 재무 스냅샷 조회 기준 회계연도. 0 = 자동(최신 fiscal_year), >0 = 해당 연도 고정(백테스트 재현용). */
+        @DefaultValue("0") int targetFiscalYear,
 
         /** 재무 스냅샷 연결구분. */
         @DefaultValue("CFS") String fsDiv,

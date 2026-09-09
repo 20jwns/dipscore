@@ -83,6 +83,7 @@ dart:
     company-path: ${DART_API_COMPANY_PATH:/api/company.json}
     financials-path: ${DART_API_FINANCIALS_PATH:/api/fnlttSinglAcntAll.json}
     corp-code-path: ${DART_API_CORP_CODE_PATH:/api/corpCode.xml}
+    stock-total-count-path: ${DART_API_STOCK_TOTAL_PATH:/api/stockTotqySttus.json}
 
 # ─────────────────────────────────────────────
 # 한국은행 ECOS 오픈API (ecos.bok.or.kr/api)
@@ -129,7 +130,7 @@ dipscore:
 attractiveness:
   enabled: ${ATTRACTIVENESS_ENABLED:true}
   engine-version: base-v1
-  target-fiscal-year: ${ATTRACTIVENESS_FISCAL_YEAR:2024}
+  target-fiscal-year: ${ATTRACTIVENESS_FISCAL_YEAR:0}   # 0 = 자동(최신 fiscal_year DESC), >0 = 해당 연도 고정
   fs-div: CFS
   macro-zscore-window: 24
   weights:
@@ -140,6 +141,15 @@ attractiveness:
     revenue-growth: 0.15
     base-rate: 0.075
     usd-krw: 0.075
+  # 주간 재무제표 적재 스케줄러 (DART fnlttSinglAcntAll + stockTotqySttus → financial_snapshot).
+  #   대상 종목은 daily-batch.symbols 재사용. 사업보고서(11011) 우선, 없으면 분기보고서 폴백.
+  #   이미 있는 회계연도는 skip. attractiveness.enabled 와 이 enabled 가 모두 true 여야 빈 생성.
+  #   수동 트리거: POST /api/admin/financial-snapshot-sync
+  financial-sync:
+    enabled: ${FINANCIAL_SNAPSHOT_SYNC_ENABLED:true}
+    cron: ${FINANCIAL_SNAPSHOT_SYNC_CRON:0 0 3 * * MON}   # Asia/Seoul, 매주 월 03:00
+    target-fiscal-year: ${FINANCIAL_SNAPSHOT_SYNC_FISCAL_YEAR:0}   # 0 = 자동(작년)
+    request-delay-ms: ${FINANCIAL_SNAPSHOT_SYNC_DELAY_MS:300}
 
 # ─────────────────────────────────────────────
 # 과거 시세 백필 (토스 일봉 캔들 GET /api/v1/candles)

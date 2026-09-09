@@ -127,8 +127,12 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 
 - 순수 계산: `attractiveness.BaseScoreEngine`(DB 비의존) + `PercentileNormalizer` / `ZScoreNormalizer` / `FundamentalMetricsCalculator`
 - 저장소 연동: `attractiveness.BaseScoreService`(`@ConditionalOnProperty attractiveness.enabled`) — 재무 스냅샷·시세·거시데이터 로딩 → 계산 → `attractiveness_score` 저장
-- 적재 스켈레톤: `attractiveness.ingest.DartFinancialSnapshotIngestionService`(DART→`financial_snapshot`, 계정 매칭·주식수는 TODO), `MacroIndicatorRefreshService`(ECOS→`macro_indicator`)
-- 스모크: `POST /api/attractiveness/{symbol}` → 계산·저장. 삼성전자(FY2024, peer=SK하이닉스·한미반도체) **기본점수 ≈ 47.0/100** (부채비율만 유리, ROE·성장 열위 → 60점 매수임계 미달)
+  - **회계연도 선택**: `financial_snapshot` 에서 `findFirstBySymbolAndFsDivOrderByFiscalYearDesc` 로 **최신 fiscal_year** 사용
+    (`entry_score` 가 `attractiveness_score` 를 `findFirstBySymbolOrderByAsOfDesc` 로 쓰는 것과 같은 패턴).
+    `attractiveness.target-fiscal-year` 를 `>0` 으로 두면 그 연도로 고정(백테스트 재현용), `0`(기본)이면 자동.
+- 적재: `attractiveness.ingest.DartFinancialSnapshotIngestionService`(DART→`financial_snapshot`) + `MacroIndicatorRefreshService`(ECOS→`macro_indicator`). 아래 "주간 배치 — 재무제표 적재" 참고.
+- 스모크: `POST /api/attractiveness/{symbol}` → 계산·저장. 3종목 FY2025 실측(2026-09): 기본점수 **삼성전자 52.0 / SK하이닉스 67.0 / 한미반도체 42.0**
+  (FY2024 대비 각 58.7→52.0 / 48.7→67.0 / 53.7→42.0 — SK하이닉스 ROE 26.8%→35.6%·PER 65.7→31.1 로 급개선, 업종 percentile 이 상대평가라 나머지 둘은 하락)
 - 가중치는 `application.yml` `attractiveness.weights.*` (전문가 초안, 기획서 4-4 4단계 방법론으로 확정 예정)
 
 ## 저점 진입 스코어 엔진 (기획서 5장)
@@ -221,6 +225,37 @@ daily-batch:
   daily-candle:
     enabled: true                 # false/미설정 → 스케줄러·컨트롤러·writer 빈 미생성 (테스트 컨텍스트가 이 상태)
     cron: "0 0 16 * * MON-FRI"     # Asia/Seoul — 평일 16:00, 장 마감(15:30) 후
+```
+
+## 주간 배치 — 재무제표 적재 (`financial-snapshot-sync`)
+
+`daily-batch.symbols` 대상 종목의 최신 재무제표를 `financial_snapshot` 에 적재한다 (기본: 매주 월 03:00 Asia/Seoul).
+`attractiveness.ingest.FinancialSnapshotSyncJob` — `DailyCandleSyncJob` 과 같은 스케줄러 패턴.
+
+- **계정 매칭**: 표준계정 `account_id`(예: `ifrs-full_Revenue`, `dart_OperatingIncomeLoss`, `ifrs-full_ProfitLoss`,
+  `ifrs-full_Equity`, `ifrs-full_Liabilities`) 우선, 없으면 `account_nm` 문자열 폴백. 손익 계정은 `sj_div` 가
+  `IS` 뿐 아니라 **`CIS`(포괄손익계산서)** 도 본다 — 별도 IS 없이 CIS 만 내는 회사(SK하이닉스 등) 대응.
+- **발행주식수**: 재무제표엔 없어 `DartStockTotalCountClient`(주식총수현황 `/api/stockTotqySttus.json`)로 별도 조회 —
+  보통주 `istc_totqy`(발행주식총수), 없으면 합계 행. 조회 실패해도 스냅샷은 저장(주식수 null).
+- **공시일**: `rcept_no` 앞 8자리 → `disclosed_at`.
+- **보고서 폴백**: 사업보고서(`11011`) → 3분기(`11014`) → 반기(`11012`) → 1분기(`11013`) 순으로 첫 성공분 적재.
+  `source` 에 실제 코드 기록 (`DART_11011_2025` 등).
+- **중복 방지**: 대상 `fiscal_year` 스냅샷이 이미 있으면 skip. 새 연도만 insert.
+- **corp_code**: `instrument.corp_code` 우선, 없으면 `corpCode.xml` 조회 폴백(042700 등). 그래도 없으면 skip.
+- 종목별 독립 — 실패해도 다음 종목 계속. 로그: `[financial-snapshot-sync] 완료: FYxxxx CFS — N종목 중 신규 x / skip y / 실패 z`.
+- **수동 트리거**: `POST /api/admin/financial-snapshot-sync` (`?symbols=…&fiscalYear=2024`). 기본 회계연도 = 작년.
+  응답: `{ fiscalYear, fsDiv, requested, inserted, skipped, failed, results:[{symbol, status, fiscalYear, source, error}] }`
+  (status: `INSERTED` / `SKIPPED_EXISTS` / `SKIPPED_NO_CORP_CODE` / `FAILED`).
+- 실측(2026-09, FY2025): 3종목 전부 `DART_11011_2025` 적재 — 삼성전자/SK하이닉스/한미반도체 매출·영업이익·순이익·자본·부채·전기매출·주식수·공시일 모두 채워짐(SK하이닉스는 CIS, 한미반도체는 corp_code 폴백).
+
+```yaml
+attractiveness:
+  enabled: true                     # 이 값도 true 여야 함 (ingestion 서비스가 여기 걸림)
+  financial-sync:
+    enabled: true                   # false/미설정 → 스케줄러·컨트롤러 빈 미생성
+    cron: "0 0 3 * * MON"           # Asia/Seoul — 매주 월 03:00
+    target-fiscal-year: 0           # 0 = 자동(작년)
+    request-delay-ms: 300
 ```
 
 ## 종목 마스터 대량 채우기 (DART 고유번호)

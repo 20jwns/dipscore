@@ -35,7 +35,8 @@ class DartApiClientTest {
     private static DartApiProperties props(String apiKey) {
         return new DartApiProperties(
                 apiKey, BASE, Duration.ofSeconds(3), Duration.ofSeconds(10),
-                "/api/company.json", "/api/fnlttSinglAcntAll.json", "/api/corpCode.xml");
+                "/api/company.json", "/api/fnlttSinglAcntAll.json", "/api/corpCode.xml",
+                "/api/stockTotqySttus.json");
     }
 
     private record Fixture(RestClient client, MockRestServiceServer server) {
@@ -90,6 +91,32 @@ class DartApiClientTest {
         assertThat(res.list()).hasSize(1);
         assertThat(res.list().get(0).accountName()).isEqualTo("유동자산");
         assertThat(res.list().get(0).statementDiv()).isEqualTo("BS");
+        f.server().verify();
+    }
+
+    @Test
+    void 주식총수현황을_조회한다() {
+        Fixture f = fixture(KEY);
+        f.server().expect(method(HttpMethod.GET))
+                .andExpect(queryParam("corp_code", "00126380"))
+                .andExpect(queryParam("bsns_year", "2024"))
+                .andExpect(queryParam("reprt_code", "11011"))
+                .andExpect(queryParam("crtfc_key", KEY))
+                .andRespond(withSuccess("""
+                        {"status":"000","message":"정상","list":[
+                          {"rcept_no":"20250311000970","corp_code":"00126380","se":"보통주",
+                           "isu_stock_totqy":"20,000,000,000","istc_totqy":"5,969,782,550",
+                           "tesstk_co":"0","distb_stock_co":"5,969,782,550"},
+                          {"se":"우선주","istc_totqy":"822,886,700"}
+                        ]}
+                        """, MediaType.APPLICATION_JSON));
+
+        var res = new com.dipscore.backend.external.dart.stocktotal.DartStockTotalCountClient(f.client(), props(KEY))
+                .getStockTotalCount("00126380", 2024, "11011");
+
+        assertThat(res.list()).hasSize(2);
+        assertThat(res.list().get(0).kind()).isEqualTo("보통주");
+        assertThat(res.list().get(0).outstandingShares()).isEqualTo("5,969,782,550");
         f.server().verify();
     }
 

@@ -32,7 +32,10 @@ public record DartApiProperties(
         @DefaultValue("/api/fnlttSinglAcntAll.json") String financialsPath,
 
         /** 고유번호(corp_code) 전체 목록 ZIP. */
-        @DefaultValue("/api/corpCode.xml") String corpCodePath
+        @DefaultValue("/api/corpCode.xml") String corpCodePath,
+
+        /** 주식총수현황 (발행주식수 조회용). */
+        @DefaultValue("/api/stockTotqySttus.json") String stockTotalCountPath
 ) {
 
     public boolean hasApiKey() {
