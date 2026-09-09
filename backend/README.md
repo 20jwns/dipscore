@@ -130,7 +130,7 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
   - **회계연도 선택**: `financial_snapshot` 에서 `findFirstBySymbolAndFsDivOrderByFiscalYearDesc` 로 **최신 fiscal_year** 사용
     (`entry_score` 가 `attractiveness_score` 를 `findFirstBySymbolOrderByAsOfDesc` 로 쓰는 것과 같은 패턴).
     `attractiveness.target-fiscal-year` 를 `>0` 으로 두면 그 연도로 고정(백테스트 재현용), `0`(기본)이면 자동.
-- 적재: `attractiveness.ingest.DartFinancialSnapshotIngestionService`(DART→`financial_snapshot`) + `MacroIndicatorRefreshService`(ECOS→`macro_indicator`). 아래 "주간 배치 — 재무제표 적재" 참고.
+- 적재: `attractiveness.ingest.DartFinancialSnapshotIngestionService`(DART→`financial_snapshot`) + `MacroIndicatorRefreshService`(ECOS→`macro_indicator`). 아래 "주간 배치 — 재무제표 적재" / "거시지표 자동 갱신" 참고.
 - 스모크: `POST /api/attractiveness/{symbol}` → 계산·저장. 3종목 FY2025 실측(2026-09): 기본점수 **삼성전자 52.0 / SK하이닉스 67.0 / 한미반도체 42.0**
   (FY2024 대비 각 58.7→52.0 / 48.7→67.0 / 53.7→42.0 — SK하이닉스 ROE 26.8%→35.6%·PER 65.7→31.1 로 급개선, 업종 percentile 이 상대평가라 나머지 둘은 하락)
 - 가중치는 `application.yml` `attractiveness.weights.*` (전문가 초안, 기획서 4-4 4단계 방법론으로 확정 예정)
@@ -256,6 +256,31 @@ attractiveness:
     cron: "0 0 3 * * MON"           # Asia/Seoul — 매주 월 03:00
     target-fiscal-year: 0           # 0 = 자동(작년)
     request-delay-ms: 300
+```
+
+## 거시지표 자동 갱신 (`macro-sync`)
+
+ECOS 최신 관측치를 `macro_indicator` 에 채운다. `attractiveness.ingest.MacroIndicatorRefreshJob` —
+검증된 `EcosStatisticClient.latestBaseRate()/latestExchangeRate()/latestCpi()` 재사용,
+`MacroIndicatorRefreshService.refreshLatest(code)` 가 시점(`ts`) 없으면 insert / 있으면 skip.
+
+- **환율(USD_KRW)** — 매일 (기본 06:00 Asia/Seoul, `exchange-rate-cron`)
+- **기준금리(BASE_RATE)·CPI** — 월 1회 (기본 매월 1일 06:00, `monthly-cron`)
+- 월지표는 `ts` 를 해당 월 1일 UTC 로 저장. `unit` = `%` / `KRW` / `2020=100`, `source` = `ECOS_<statCode>`.
+- 지표별 독립 — 하나 실패해도 다음 지표 계속. 로그: `[macro-sync] 완료: N개 지표 중 신규 x / skip y / 실패 z`.
+- **수동 트리거**: `POST /api/admin/macro-sync` (기본 3지표). `?codes=USD_KRW,CPI` 로 지정.
+  응답: `{ requested, inserted, skipped, failed, results:[{indicatorCode, ts, value, status, error}] }`
+  (status: `INSERTED` / `SKIPPED_EXISTS` / `FAILED`).
+- 실측(2026-09): 1회차 3지표 전부 INSERTED (BASE_RATE 2026-08=3.0%, USD_KRW 2026-09-09=1341.1, CPI 2026-08=120.05),
+  2회차 전부 SKIPPED_EXISTS (멱등).
+
+```yaml
+attractiveness:
+  enabled: true                     # 이 값도 true 여야 함
+  macro-sync:
+    enabled: true                   # false/미설정 → 스케줄러·컨트롤러 빈 미생성
+    exchange-rate-cron: "0 0 6 * * *"    # Asia/Seoul — 매일 06:00 (환율)
+    monthly-cron: "0 0 6 1 * *"          # Asia/Seoul — 매월 1일 06:00 (기준금리·CPI)
 ```
 
 ## 종목 마스터 대량 채우기 (DART 고유번호)

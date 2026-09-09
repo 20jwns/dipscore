@@ -150,6 +150,13 @@ attractiveness:
     cron: ${FINANCIAL_SNAPSHOT_SYNC_CRON:0 0 3 * * MON}   # Asia/Seoul, 매주 월 03:00
     target-fiscal-year: ${FINANCIAL_SNAPSHOT_SYNC_FISCAL_YEAR:0}   # 0 = 자동(작년)
     request-delay-ms: ${FINANCIAL_SNAPSHOT_SYNC_DELAY_MS:300}
+  # 거시지표(ECOS) 자동 갱신 스케줄러 (EcosStatisticClient.latestX → macro_indicator, 이미 있는 ts 는 skip).
+  #   환율(USD_KRW) 매일 06:00 / 기준금리·CPI 월 1일 06:00 (Asia/Seoul).
+  #   attractiveness.enabled 와 이 enabled 가 모두 true 여야 빈 생성. 수동 트리거: POST /api/admin/macro-sync
+  macro-sync:
+    enabled: ${MACRO_SYNC_ENABLED:true}
+    exchange-rate-cron: ${MACRO_SYNC_FX_CRON:0 0 6 * * *}     # 매일 06:00
+    monthly-cron: ${MACRO_SYNC_MONTHLY_CRON:0 0 6 1 * *}      # 매월 1일 06:00 — 기준금리·CPI
 
 # ─────────────────────────────────────────────
 # 과거 시세 백필 (토스 일봉 캔들 GET /api/v1/candles)
