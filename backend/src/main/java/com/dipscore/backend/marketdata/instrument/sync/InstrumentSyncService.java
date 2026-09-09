@@ -1,5 +1,7 @@
 package com.dipscore.backend.marketdata.instrument.sync;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -57,13 +59,20 @@ public class InstrumentSyncService {
     }
 
     public InstrumentSyncReport sync(boolean filterByCorpCls) {
-        return sync(filterByCorpCls, List.of());
+        return sync(filterByCorpCls, List.of(), false);
+    }
+
+    public InstrumentSyncReport sync(boolean filterByCorpCls, List<String> onlySymbols) {
+        return sync(filterByCorpCls, onlySymbols, false);
     }
 
     /**
-     * @param onlySymbols 비어 있지 않으면 이 종목코드들만 대상으로 한다 (소규모 검증·재동기화용).
+     * @param onlySymbols      비어 있지 않으면 이 종목코드들만 대상으로 한다 (소규모 검증·재동기화용).
+     * @param detectDelistings true 면 upsert 후, DART 목록에서 {@code staleDaysBeforeDeactivate} 일 이상
+     *                         확인 안 된 활성 KR_STOCK 을 {@code active=false} 로 전환한다.
+     *                         onlySymbols 지정 실행이나 청크 실패가 있으면 스윕을 건너뛴다.
      */
-    public InstrumentSyncReport sync(boolean filterByCorpCls, List<String> onlySymbols) {
+    public InstrumentSyncReport sync(boolean filterByCorpCls, List<String> onlySymbols, boolean detectDelistings) {
         List<DartCorpCode> all = dartCorpCodeClient.downloadAll();
         List<DartCorpCode> listed = all.stream().filter(DartCorpCode::isListed).toList();
 
@@ -99,13 +108,27 @@ public class InstrumentSyncService {
         int failed = active.failed() + konex.failed();
         int konexDeactivated = konex.created() + konex.updated(); // 실제로 active=false 로 DB 반영된 건수
 
+        boolean targeted = onlySymbols != null && !onlySymbols.isEmpty();
+        int delistingsDeactivated = 0;
+        if (detectDelistings && !targeted && failed == 0 && !deduped.isEmpty()) {
+            int staleDays = props.staleDaysBeforeDeactivate();
+            Instant cutoff = Instant.now().minus(staleDays, ChronoUnit.DAYS);
+            delistingsDeactivated = writer.deactivateStale(cutoff);
+            log.info("[instrument-sync] 상장폐지 감지: DART 목록에서 {}일+ 미확인된 활성 KR_STOCK {}건 → active=false (기준 {})",
+                    staleDays, delistingsDeactivated, cutoff);
+        } else if (detectDelistings) {
+            log.info("[instrument-sync] 상장폐지 감지 스킵 (onlySymbols={}, 청크실패={}, 상장수={})",
+                    targeted, failed, deduped.size());
+        }
+
         InstrumentSyncReport report = new InstrumentSyncReport(
                 all.size(), listed.size(), deduped.size(),
                 filterByCorpCls, konexDeactivated, cls.lookupFailed(), cls.aborted(),
-                created, updated, failed);
-        log.info("[instrument-sync] 완료: 신규 {} / 갱신 {} / 실패 {}, 코넥스 비활성화(active=false) {} "
+                created, updated, failed, delistingsDeactivated);
+        log.info("[instrument-sync] 완료: 신규 {} / 갱신 {} / 실패 {}, 코넥스 비활성화 {}, 상장폐지 비활성화 {} "
                         + "(DART 전체 {}, 상장 {}, 중복제거 후 {}, corp_cls필터 {}, 조회실패 {}{})",
-                created, updated, failed, konexDeactivated, all.size(), listed.size(), deduped.size(),
+                created, updated, failed, konexDeactivated, delistingsDeactivated,
+                all.size(), listed.size(), deduped.size(),
                 filterByCorpCls, cls.lookupFailed(), cls.aborted() ? ", 필터 중단됨" : "");
         return report;
     }
@@ -213,6 +236,8 @@ public class InstrumentSyncService {
      * @param created               신규 insert 된 수 (활성+비활성 합)
      * @param updated               기존 종목 갱신 수 (활성+비활성 합)
      * @param failed                청크 실패로 건너뛴 수
+     * @param delistingsDeactivated DART 목록에서 사라져 {@code active=false} 로 전환된 KR_STOCK 수
+     *                              (상장폐지 감지, 유예일 경과분만). 스윕 건너뛴 실행은 0.
      */
     public record InstrumentSyncReport(
             int dartTotalCount,
@@ -224,6 +249,7 @@ public class InstrumentSyncService {
             boolean aborted,
             int created,
             int updated,
-            int failed
+            int failed,
+            int delistingsDeactivated
     ) {}
 }

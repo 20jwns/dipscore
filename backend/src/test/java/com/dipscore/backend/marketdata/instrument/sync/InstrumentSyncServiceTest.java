@@ -1,16 +1,20 @@
 package com.dipscore.backend.marketdata.instrument.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import com.dipscore.backend.external.dart.DartApiException;
@@ -39,13 +43,16 @@ class InstrumentSyncServiceTest {
     @Mock
     InstrumentRepository instrumentRepository;
 
+    private static final int STALE_DAYS = 3;
+
     private InstrumentSyncService service(int chunkSize) {
         return service(chunkSize, 20);
     }
 
     private InstrumentSyncService service(int chunkSize, int maxConsecutiveFailures) {
         return new InstrumentSyncService(dartCorpCodeClient, dartCompanyClient, writer, instrumentRepository,
-                new InstrumentSyncProperties(true, chunkSize, true, 0L, maxConsecutiveFailures)); // delay 0
+                new InstrumentSyncProperties(true, true, "0 0 4 * * *", chunkSize, true, true, STALE_DAYS,
+                        0L, maxConsecutiveFailures)); // delay 0
     }
 
     private static DartCorpCode dc(String corpCode, String name, String stockCode) {
@@ -207,5 +214,61 @@ class InstrumentSyncServiceTest {
         verify(writer).upsertChunk(anyList(), isNull());
         assertThat(report.corpClsFilterApplied()).isFalse();
         assertThat(report.created()).isEqualTo(2);
+    }
+
+    // ── 상장폐지 감지 (detectDelistings) ─────────────────────────
+
+    @Test
+    void detectDelistings_true면_업서트후_stale_KR_STOCK를_비활성화한다() {
+        when(dartCorpCodeClient.downloadAll()).thenReturn(List.of(
+                dc("c1", "A", "000001"), dc("c2", "B", "000002")));
+        when(instrumentRepository.findAllSymbols()).thenReturn(List.of("000001"));
+        when(writer.deactivateStale(any())).thenReturn(4);
+
+        InstrumentSyncReport report = service(500).sync(false, List.of(), true);
+
+        ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+        verify(writer).deactivateStale(cutoff.capture());
+        // 유예일(3d) 만큼 과거
+        Instant expected = Instant.now().minus(STALE_DAYS, ChronoUnit.DAYS);
+        assertThat(cutoff.getValue()).isCloseTo(expected, within(1, ChronoUnit.MINUTES));
+        assertThat(report.delistingsDeactivated()).isEqualTo(4);
+    }
+
+    @Test
+    void detectDelistings_true여도_onlySymbols_지정시엔_스윕하지_않는다() {
+        when(dartCorpCodeClient.downloadAll()).thenReturn(List.of(
+                dc("c1", "A", "000001"), dc("c2", "B", "000002")));
+        when(instrumentRepository.findAllSymbols()).thenReturn(List.of());
+
+        InstrumentSyncReport report = service(500).sync(false, List.of("000001"), true);
+
+        verify(writer, never()).deactivateStale(any());
+        assertThat(report.delistingsDeactivated()).isZero();
+    }
+
+    @Test
+    void 청크_실패가_있으면_상장폐지_스윕을_건너뛴다() {
+        when(dartCorpCodeClient.downloadAll()).thenReturn(List.of(
+                dc("c1", "A", "000001"), dc("c2", "B", "000002")));
+        when(instrumentRepository.findAllSymbols()).thenReturn(List.of());
+        doThrow(new RuntimeException("boom")).when(writer).upsertChunk(anyList(), isNull());
+
+        InstrumentSyncReport report = service(500).sync(false, List.of(), true);
+
+        verify(writer, never()).deactivateStale(any());
+        assertThat(report.failed()).isEqualTo(2);
+        assertThat(report.delistingsDeactivated()).isZero();
+    }
+
+    @Test
+    void detectDelistings_기본값_false면_스윕하지_않는다() {
+        when(dartCorpCodeClient.downloadAll()).thenReturn(List.of(dc("c1", "A", "000001")));
+        when(instrumentRepository.findAllSymbols()).thenReturn(List.of());
+
+        service(500).sync(false);          // 1-arg
+        service(500).sync(false, List.of()); // 2-arg
+
+        verify(writer, never()).deactivateStale(any());
     }
 }

@@ -49,6 +49,10 @@ public class Instrument {
     @Column(name = "active", nullable = false)
     private boolean active;
 
+    /** DART 상장목록에서 마지막으로 확인된 시각 (상장폐지 감지 유예 기준). */
+    @Column(name = "last_seen_at")
+    private Instant lastSeenAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -80,6 +84,10 @@ public class Instrument {
 
     public boolean isActive() {
         return active;
+    }
+
+    public Instant getLastSeenAt() {
+        return lastSeenAt;
     }
 
     public String getCurrency() {

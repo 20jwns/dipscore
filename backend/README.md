@@ -101,8 +101,9 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 | `V4__attractiveness_base_score.sql` | `financial_snapshot` + `macro_indicator`(하이퍼테이블) + `attractiveness_score` + 반도체 peer(삼성전자·SK하이닉스·한미반도체) 시드 |
 | `V5__entry_score.sql` | `entry_score`(저점 진입 스코어 계산 결과) |
 | `V6__instrument_active.sql` | `instrument.active` BOOLEAN(soft-delete). 코넥스 등 유니버스 제외용 |
+| `V7__instrument_last_seen_at.sql` | `instrument.last_seen_at` TIMESTAMPTZ. DART 상장목록 마지막 확인 시각 (상장폐지 감지 유예 기준) |
 
-- **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique), `active`(soft-delete, 코넥스 등 제외) — 엔티티 `marketdata.instrument.Instrument`
+- **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique), `active`(soft-delete, 코넥스·상장폐지 제외), `last_seen_at`(상장폐지 감지 유예 기준) — 엔티티 `marketdata.instrument.Instrument`
 - **`price_history`**: PK `(symbol, ts)`, `ts` 기준 하이퍼테이블(청크 7일), OHLCV(`open/high/low/volume` 은 nullable), `close` NOT NULL, `source` 출처 태그, `instrument` 로 FK — 엔티티 `marketdata.price.PriceHistory` (복합키 `PriceHistoryId`)
   - 현재 적재기는 토스 `/api/v1/prices` 의 현재가만 얻으므로 `close` 만 채운다. 정규 분봉/일봉 소스 연동 시 같은 테이블에 전체 필드 적재.
 - **`financial_snapshot`**: PK `(symbol, fiscal_year, fs_div)`, DART 재무제표를 소화한 핵심 계정(매출/영업이익/순이익/자본총계/부채총계/전기매출/발행주식수), **금액 단위 백만원** — 엔티티 `marketdata.financial.FinancialSnapshot`
@@ -283,16 +284,31 @@ attractiveness:
     monthly-cron: "0 0 6 1 * *"          # Asia/Seoul — 매월 1일 06:00 (기준금리·CPI)
 ```
 
-## 종목 마스터 대량 채우기 (DART 고유번호)
+## 종목 마스터 동기화 (DART 고유번호) — `instrument-sync`
 
 `DartCorpCodeClient.downloadAll()`(corpCode.xml, ~12만 회사) → 상장(`stockCode` 있음)만 필터 →
-`stockCode` 중복 제거 → (선택) corp_cls 분류 → `InstrumentSyncWriter`(청크 단위 트랜잭션)로 `instrument` upsert.
+`stockCode` 중복 제거 → (선택) corp_cls 분류 → `InstrumentSyncWriter`(청크 단위 트랜잭션)로 `instrument` upsert
+→ (선택) 상장폐지 감지 스윕.
 
-- **수동 트리거만**: `POST /api/admin/instrument-sync` — 자동 실행 안 함.
-- `?symbols=086220,224810,005930` — 지정 종목코드만 대상 (소규모 검증·재동기화). 미지정 시 DART 상장 전체.
-- upsert(`InstrumentRepository.upsertFromDart`): `INSERT ... ON CONFLICT (symbol) DO UPDATE SET name, corp_code, active, updated_at` — **`name`·`corp_code`(·`active`) 만 갱신**.
-  `sector`/`industry`/`market_type`/`currency` 는 SET 절에 없어 **기존 값 유지** (반도체 3사 시드의 `sector=IT, industry=반도체` 안 지워짐). 신규는 `market_type=KR_STOCK` 고정.
+- **매일 자동**: `InstrumentSyncJob` `@Scheduled(cron, zone="Asia/Seoul")` 기본 `0 0 4 * * *`(04:00) —
+  15분+ 걸리므로 재무(월 03:00)·거시(06:00) 배치와 겹치지 않게. `filterByCorpCls=true`, 상장폐지 감지 ON 으로 실행.
+  `instrument-sync.scheduled=false` 로 스케줄러만 끌 수 있다(수동 엔드포인트는 유지).
+- **수동 트리거**: `POST /api/admin/instrument-sync` — `?filterByCorpCls=false`(빠르게), `?symbols=086220,005930`(지정만),
+  `?detectDelistings=true`(상장폐지 스윕; 수동은 명시할 때만).
+- upsert(`InstrumentRepository.upsertFromDart`): `INSERT ... ON CONFLICT (symbol) DO UPDATE SET name, corp_code, active, last_seen_at, updated_at` — **`name`·`corp_code`(·`active`)·`last_seen_at` 만 갱신**.
+  `sector`/`industry`/`market_type`/`currency` 는 SET 절에 없어 **기존 값 유지**. 신규는 `market_type=KR_STOCK` 고정.
 - 청크(기본 500) 하나가 실패해도 나머지 진행, `failed` 로 집계. 멱등(재실행 안전).
+
+**상장폐지 감지** (`detect-delistings`, 스케줄러 실행 시 기본 on):
+
+- 매 실행마다 이번 DART 목록에 있는 종목의 `last_seen_at` 을 `now()` 로 갱신(upsert). 그 뒤,
+  `last_seen_at` 이 `stale-days-before-deactivate`(기본 3)일 이상 지난 **활성 `KR_STOCK`** 을 `active=false` 로 전환.
+- **유예기간** 목적: DART 일시 조회 실패로 목록이 잠깐 비어도 3일 연속 미확인이어야 비활성 → 오탐 방지.
+- **스윕 건너뛰는 경우**: `?symbols=` 지정 실행, 청크 실패(`failed>0`), DART 목록이 빈 응답. (이번 실행 `delistingsDeactivated=0`)
+- `last_seen_at IS NULL` 행은 추적 이력이 없다는 뜻이라 건드리지 않음. `market_type='KR_STOCK'` 만 대상(미국주식/ETF 제외).
+- `delistingsDeactivated` = 이번 실행에서 실제로 `active=false` 된 KR_STOCK 수.
+- 소규모 실측(2026-09, `?filterByCorpCls=false&detectDelistings=true`): 합성 종목 2개 삽입
+  (`last_seen_at` 10일 전 / 방금) → 10일 전만 `active=false`, 유예중은 유지. 실제 3,989종목 `last_seen_at` 갱신, ~17초.
 
 **corp_cls 시장구분 필터** (`filter-by-corp-cls`, 기본 on. `?filterByCorpCls=false` 로 호출별 off):
 
@@ -308,9 +324,13 @@ attractiveness:
 
 ```yaml
 instrument-sync:
-  enabled: true          # false/미설정 → 엔드포인트·서비스 빈 미생성
+  enabled: true          # false/미설정 → 엔드포인트·서비스·스케줄러 빈 미생성
+  scheduled: true        # false → 스케줄러(InstrumentSyncJob)만 끔. 수동 엔드포인트는 유지
+  cron: "0 0 4 * * *"    # Asia/Seoul — 매일 04:00
   chunk-size: 500
   filter-by-corp-cls: true            # 코넥스(N) → active=false. ?filterByCorpCls=false 로 끄면 수 초
+  detect-delistings: true             # DART 목록에서 사라진 활성 KR_STOCK → 유예 후 active=false
+  stale-days-before-deactivate: 3     # 상장폐지 판정 유예일
   company-lookup-delay-ms: 100
   company-lookup-max-consecutive-failures: 20
 ```

@@ -221,15 +221,20 @@ signal:
 
 # ─────────────────────────────────────────────
 # 종목 마스터 대량 채우기 (DART 고유번호 corpCode.xml)
-#   enabled=true 여도 자동 실행 안 함 — POST /api/admin/instrument-sync 로만 수동 트리거.
-#   상장 종목(stockCode 있음)만, symbol 기준 upsert (name·corp_code 만 갱신, sector/industry 유지).
+#   scheduled=true 면 매일 cron 에 InstrumentSyncJob 이 전체 동기화 (15분+). 언제든 POST /api/admin/instrument-sync 수동 트리거.
+#   상장 종목(stockCode 있음)만, symbol 기준 upsert (name·corp_code·last_seen_at 만 갱신, sector/industry 유지).
+#   DART 목록에서 사라진 활성 KR_STOCK 은 유예일 경과 후 active=false (상장폐지 감지).
 # ─────────────────────────────────────────────
 instrument-sync:
   enabled: ${INSTRUMENT_SYNC_ENABLED:true}
+  scheduled: ${INSTRUMENT_SYNC_SCHEDULED:true}
+  cron: ${INSTRUMENT_SYNC_CRON:0 0 4 * * *}   # Asia/Seoul, 매일 04:00 (재무:월03시 / 거시:06시 배치와 겹치지 않게)
   chunk-size: ${INSTRUMENT_SYNC_CHUNK_SIZE:500}
   # corp_cls 필터: 각 종목 DART 기업개황 조회로 시장구분 확인 → 코넥스(N) 제외.
   #   3천여 건 개별 호출 → 수십 분 소요 + DART 일일 요청 한도 소모.
   #   빠르게 실행하려면 POST ?filterByCorpCls=false
   filter-by-corp-cls: ${INSTRUMENT_SYNC_FILTER_CORP_CLS:true}
+  detect-delistings: ${INSTRUMENT_SYNC_DETECT_DELISTINGS:true}
+  stale-days-before-deactivate: ${INSTRUMENT_SYNC_STALE_DAYS:3}   # DART 목록 미확인 N일+ → active=false
   company-lookup-delay-ms: ${INSTRUMENT_SYNC_COMPANY_DELAY_MS:100}
   company-lookup-max-consecutive-failures: ${INSTRUMENT_SYNC_MAX_FAILURES:20}

@@ -1,5 +1,6 @@
 package com.dipscore.backend.marketdata.instrument;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -32,20 +33,39 @@ public interface InstrumentRepository extends JpaRepository<Instrument, String> 
      *   <li>{@code true} — 활성으로 set (corp_cls 필터 ON, 비코넥스).</li>
      *   <li>{@code false} — 비활성으로 set (corp_cls 필터 ON, 코넥스 → soft-delete).</li>
      * </ul>
+     * {@code last_seen_at} 은 항상 {@code now()} 로 갱신한다 (상장폐지 감지 유예 기준).
      * 호출자는 트랜잭션 컨텍스트 안이어야 한다.
      */
     @Modifying
     @Query(value = """
-            INSERT INTO instrument (symbol, name, market_type, corp_code, active)
-            VALUES (:symbol, :name, 'KR_STOCK', :corpCode, COALESCE(CAST(:active AS boolean), true))
+            INSERT INTO instrument (symbol, name, market_type, corp_code, active, last_seen_at)
+            VALUES (:symbol, :name, 'KR_STOCK', :corpCode, COALESCE(CAST(:active AS boolean), true), now())
             ON CONFLICT (symbol) DO UPDATE SET
               name = EXCLUDED.name,
               corp_code = EXCLUDED.corp_code,
               active = COALESCE(CAST(:active AS boolean), instrument.active),
+              last_seen_at = now(),
               updated_at = now()
             """, nativeQuery = true)
     void upsertFromDart(@Param("symbol") String symbol,
                         @Param("name") String name,
                         @Param("corpCode") String corpCode,
                         @Param("active") Boolean active);
+
+    /**
+     * DART 상장목록에서 {@code cutoff} 이후로 확인되지 않은 활성 KR_STOCK 을 {@code active=false} 로 전환한다
+     * (상장폐지 감지). {@code last_seen_at IS NULL} 이면 추적 이력이 없다는 뜻이라 건드리지 않는다.
+     * 국내주식({@code KR_STOCK})만 대상 — 미국주식/ETF 는 instrument-sync 관리 밖.
+     *
+     * @return 비활성화된 행 수
+     */
+    @Modifying
+    @Query(value = """
+            UPDATE instrument SET active = false, updated_at = now()
+            WHERE active = true
+              AND market_type = 'KR_STOCK'
+              AND last_seen_at IS NOT NULL
+              AND last_seen_at < :cutoff
+            """, nativeQuery = true)
+    int deactivateStaleKrStocks(@Param("cutoff") Instant cutoff);
 }

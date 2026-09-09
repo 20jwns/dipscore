@@ -1,5 +1,6 @@
 package com.dipscore.backend.marketdata.instrument.sync;
 
+import java.time.Instant;
 import java.util.List;
 
 import com.dipscore.backend.external.dart.corpcode.dto.DartCorpCode;
@@ -34,6 +35,17 @@ public class InstrumentSyncWriter {
         for (DartCorpCode c : chunk) {
             instrumentRepository.upsertFromDart(c.stockCode().trim(), truncate(c.corpName()), c.corpCode(), active);
         }
+    }
+
+    /**
+     * DART 상장목록에서 {@code cutoff} 이후로 확인되지 않은 활성 KR_STOCK 을 비활성화 (상장폐지 감지).
+     * upsert 로 이번 목록의 종목들이 모두 {@code last_seen_at=now()} 로 갱신된 <b>뒤</b>에 호출해야 한다.
+     *
+     * @return 비활성화된 행 수
+     */
+    @Transactional
+    public int deactivateStale(Instant cutoff) {
+        return instrumentRepository.deactivateStaleKrStocks(cutoff);
     }
 
     private static String truncate(String name) {
