@@ -212,8 +212,8 @@ entry-score:
   entry-threshold: 70                 # 진입 임계값 (참고/로그용, 백테스트로 조정)
 
 # ─────────────────────────────────────────────
-# 매매 신호 판정 (기획서 7-1). 현재 "매수 신호" 판정만 — 계좌/포지션 개념이 없어 매도 신호는 TODO.
-#   임계값은 entry-score.* 와 같은 값이나 매수 룰 고유 튜닝 대상이라 분리 (기획서 7-3).
+# 매매 신호 판정 (기획서 7). 매수(7-1) + 매도(7-2) 룰의 임계값.
+#   임계값은 entry-score.* 와 겹치는 것도 있으나 매매 룰 고유 튜닝 대상이라 분리 (기획서 7-3).
 #   enabled=false 면 DB 의존 빈(TradingSignalService/컨트롤러) 미생성.
 # ─────────────────────────────────────────────
 signal:
@@ -221,6 +221,24 @@ signal:
   entry-threshold: 70          # 저점진입스코어 ≥
   min-base-score: 60           # 매력도 기본점수 ≥
   event-coefficient-min: 0.9   # 이벤트조정계수 ≥ (음수 이벤트 없음). 현재 조정계수는 항상 1.0
+  target-profit-rate: 0.025    # 매도: 목표수익률 (기획서 +2~3% 구간, 백테스트로 조정할 단일 운용값)
+  stop-loss-atr-multiple: 1.25 # 매도: 손절 ATR 배수 (기획서 1~1.5배 구간)
+  force-close-time: "15:20"    # 매도: 보유시간 초과 강제청산 시각 (HH:mm, Asia/Seoul)
+
+# ─────────────────────────────────────────────
+# 가상 계좌 / 포지션 (기획서 7). 매수 신호(BUY) 발생 시 MockOrderExecutor 로 가상 체결한다
+#   (실제 주문 API 호출 없음 — 1차 범위는 직접/AI 모의투자까지).
+#   enabled=false 면 DB 의존 빈(Account/BuyExecution/SellExecution 서비스·MockOrderExecutor·컨트롤러) 미생성.
+#   account.enabled 와 signal.enabled 가 모두 true 여야 매수/매도 체결 관련 빈이 뜬다.
+# ─────────────────────────────────────────────
+account:
+  enabled: ${ACCOUNT_ENABLED:true}
+  initial-capital: ${ACCOUNT_INITIAL_CAPITAL:10000000}         # POST /api/account/init 기본 초기자금 (원)
+  min-initial-capital: ${ACCOUNT_MIN_INITIAL_CAPITAL:100000}   # 계좌 개설 최소 초기자금 — 미달이면 거부
+  min-buy-unit: ${ACCOUNT_MIN_BUY_UNIT:100000}                 # 최소매수단위 — 보유현금 > 이 값 이어야 매수신호 조건 충족
+  # 변동성 기반 사이징: 수량 = (잔고 × risk-per-trade-pct) / (매수가 - 손절가), 손절가는 entry_atr × signal.stop-loss-atr-multiple
+  risk-per-trade-pct: ${ACCOUNT_RISK_PER_TRADE_PCT:0.01}       # 거래당 리스크 허용 비율 (잔고 대비, 기본 1%)
+  currency: KRW
 
 # ─────────────────────────────────────────────
 # 종목 마스터 대량 채우기 (DART 고유번호 corpCode.xml)

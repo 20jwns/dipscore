@@ -102,6 +102,7 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 | `V5__entry_score.sql` | `entry_score`(저점 진입 스코어 계산 결과) |
 | `V6__instrument_active.sql` | `instrument.active` BOOLEAN(soft-delete). 코넥스 등 유니버스 제외용 |
 | `V7__instrument_last_seen_at.sql` | `instrument.last_seen_at` TIMESTAMPTZ. DART 상장목록 마지막 확인 시각 (상장폐지 감지 유예 기준) |
+| `V8__account_and_position.sql` | `account`(가상 계좌) + `position`(보유/청산 포지션). 계좌·종목당 OPEN 은 1개로 제한(부분 unique 인덱스) |
 
 - **`instrument`**: `symbol`(PK), `name`, `market_type`(`KR_STOCK`/`US_STOCK`/`ETF` CHECK), `sector`, `industry`, `currency`, `corp_code`(DART 고유번호 8자리, nullable·unique), `active`(soft-delete, 코넥스·상장폐지 제외), `last_seen_at`(상장폐지 감지 유예 기준) — 엔티티 `marketdata.instrument.Instrument`
 - **`price_history`**: PK `(symbol, ts)`, `ts` 기준 하이퍼테이블(청크 7일), OHLCV(`open/high/low/volume` 은 nullable), `close` NOT NULL, `source` 출처 태그, `instrument` 로 FK — 엔티티 `marketdata.price.PriceHistory` (복합키 `PriceHistoryId`)
@@ -110,6 +111,8 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 - **`macro_indicator`**: PK `(indicator_code, ts)`, `ts` 하이퍼테이블. 거시지표 시계열(BASE_RATE/USD_KRW…), Z-score 분포 창 — 엔티티 `marketdata.macro.MacroIndicator`
 - **`attractiveness_score`**: PK `(symbol, as_of)`, `base_score`·`event_coefficient`·`attractiveness` + `factor_breakdown`(JSON, 요인별 raw/정규화/가중) — 엔티티 `attractiveness.persistence.AttractivenessScore`
 - **`entry_score`**: PK `(symbol, as_of)`, `rebound_signal`·`technical_indicator`·`attractiveness_component`(각 0~1) + `entry_score`(0~100) + `filter_passed` + `factor_breakdown`(JSON) — 엔티티 `entryscore.persistence.EntryScore`
+- **`account`**: `id`(PK), `initial_capital`·`cash_balance`(원), `currency` — 엔티티 `trading.Account`. 현금 증감은 `debit`/`credit` 메서드로만(직접 setter 없음)
+- **`position`**: `id`(PK), `account_id`·`symbol`(FK), `status`(OPEN/CLOSED), `quantity`, `entry_price`·`entry_at`·`entry_atr`(진입 시점 ATR, 손절가 계산 기준), (청산 시) `exit_price`·`exit_at`·`exit_reason`·`realized_pnl` — 엔티티 `trading.Position`
 
 ## 매력도 지수 "기본점수" 엔진 (기획서 4장)
 
@@ -156,21 +159,85 @@ ECOS 가 `text/html` content-type 으로 JSON 을 주는 경우가 있어 문자
 
 ## 매매 신호 판정 (기획서 7)
 
-`signal.TradingSignalService`(`@ConditionalOnProperty signal.enabled`) — **매수 신호 판정만** 구현.
-저장 없이 계산·반환. `GET /api/trading-signal/{symbol}` → `decision` `BUY`(매수신호)/`WAIT`(대기) + 조건별 상세.
+`signal.TradingSignalService`(`@ConditionalOnProperty signal.enabled`) — **매수 + 매도 신호 판정** 둘 다 구현.
+저장 없이 계산·반환.
+
+**매수** — `GET /api/trading-signal/{symbol}` → `decision` `BUY`(매수신호)/`WAIT`(대기) + 조건별 상세.
+`?accountId=1` 을 주면 아래 "보유현금" 조건도 그 계좌의 실제 잔고로 평가한다(생략 시 `evaluated:false`, 하위호환).
 
 기획서 7-1 매수 룰:
 
-| 조건 | 소스 | 현재 상태 |
-|---|---|---|
-| 저점진입스코어 ≥ `signal.entry-threshold`(70) | 최신 `entry_score.entry_score` | 평가 |
-| 기본점수 ≥ `signal.min-base-score`(60) | 최신 `attractiveness_score.base_score` | 평가 |
-| 이벤트조정계수 ≥ `signal.event-coefficient-min`(0.9) | 최신 `attractiveness_score.event_coefficient` | 평가 (계수 항상 1.0 → 사실상 항상 통과, 기획서 4-5 TODO) |
-| 보유현금 > 최소매수단위 | — | **미평가**(`evaluated:false`) — 계좌/포지션 개념 없음, TODO |
+| 조건 | 소스 |
+|---|---|
+| 저점진입스코어 ≥ `signal.entry-threshold`(70) | 최신 `entry_score.entry_score` |
+| 기본점수 ≥ `signal.min-base-score`(60) | 최신 `attractiveness_score.base_score` |
+| 이벤트조정계수 ≥ `signal.event-coefficient-min`(0.9) | 최신 `attractiveness_score.event_coefficient` (계수 항상 1.0 → 사실상 항상 통과, 기획서 4-5 TODO) |
+| 보유현금 > `account.min-buy-unit`(10만원) | `?accountId=` 지정 시 `account.cash_balance` |
 
 - 전제 데이터 없으면 422 (`entry_score` 없으면 `POST /api/entry-score/{symbol}` 먼저, `attractiveness_score` 없으면 `POST /api/attractiveness/{symbol}` 먼저).
-- **매도 신호(기획서 7-2, 목표수익률/손절/보유시간)는 이번 범위 밖** — 포지션(진입가·진입시각·수량) 개념 필요, `TradingSignalService` 클래스 주석에 TODO.
-- 스모크: 3종목 모두 매력도 기본점수 < 60 (58.7/48.7/53.7) 이고 entry_score 0 → **셋 다 `WAIT`**(저점진입스코어·기본점수 조건 미충족). `conditions` 배열에 조건별 actual/threshold/pass 표시.
+
+**매도** — `TradingSignalService.evaluateSellSignal(Position)` (포지션 하나 단위 판정, 전용 조회 엔드포인트는 없고
+`POST /api/account/{accountId}/positions/{positionId}/sell-check` 로 판정+체결을 한 번에). 기획서 7-2 매도 룰:
+
+| 조건 | 소스 |
+|---|---|
+| 수익률 ≥ `signal.target-profit-rate`(2.5%) | (현재가-진입가)/진입가, 현재가 = 최신 `price_history.close` |
+| 현재가 ≤ 진입가 - 진입ATR×`signal.stop-loss-atr-multiple`(1.25) | `position.entry_atr`(매수 체결 시점 ATR, 고정 보관). 기록 없으면 이 조건은 `evaluated:false` |
+| 시각 ≥ `signal.force-close-time`(15:20, Asia/Seoul) | `Clock` 주입(테스트 가능) |
+
+세 조건 중 하나라도 트리거되면 매도(우선순위: 목표수익률 → 손절 → 보유시간 초과 — 앞 둘은 가격 방향이 반대라 동시 트리거 불가).
+- 스모크(2026-09, FY2025): 매력도 기본점수 51.95/66.95/41.95 — 000660 만 60 이상. entry_score 는 저점진입스코어 임계(70) 미달로 3종목 모두 **`WAIT`**(기본 설정 기준). `conditions` 배열에 조건별 actual/threshold/pass 표시.
+
+## 가상 계좌 / 포지션 (기획서 7)
+
+`trading.*` 패키지. 매수 신호(BUY)가 뜨면 실제로 가상 매수 체결하고, 매도 신호가 트리거되면 가상 매도 체결해
+포지션을 청산한다. **실제 주문 API 는 절대 호출하지 않는다** — CLAUDE.md 아키텍처 원칙대로 주문 실행부를
+`OrderExecutor` 인터페이스로 분리해 `MockOrderExecutor`(모의, 이번 구현)를 끼워 넣었다. 실전투자(3차, 이번 범위
+아님) 착수 시 같은 인터페이스로 `TossOrderExecutor` 를 구현해 갈아끼우면 `BuyExecutionService`/
+`SellExecutionService` 는 변경 없이 그대로 재사용된다.
+
+- **`OrderExecutor`**: `quote(symbol)`(참고 시세) / `buyMarket(symbol, qty)` / `sellMarket(symbol, qty)` → `OrderExecution`.
+  `MockOrderExecutor` 는 최신 `price_history.close` 를 체결가로 즉시(슬리피지·수수료 없이) 체결 시뮬레이션.
+- **`BuyExecutionService.buyIfSignaled(accountId, symbol)`**: `TradingSignalService.evaluateBuySignal(symbol, accountId)`
+  로 판정 → BUY 아니면 422(미달 조건 나열). BUY 면: 중복 포지션 체크 → 진입 ATR 계산(`entry-score.atr-period` 재사용,
+  부족하면 사이징 불가로 422) → **변동성 기반 사이징**으로 수량 산정 → 체결 → `account.debit(cost)` + `Position` OPEN
+  생성(`entry_atr` 고정 보관).
+  ```
+  매수 수량 = (계좌 현재 잔고 × account.risk-per-trade-pct) / (매수가 - 손절가)
+  손절가   = 매수가 - entry_atr × signal.stop-loss-atr-multiple
+  ```
+  즉 "이 거래가 손절까지 갔을 때 잃는 최대 금액 = 잔고 × 리스크비율" 이 되도록 역산 — 변동성(ATR) 이 큰 종목일수록
+  수량이 자동으로 줄어 종목별 리스크가 균등해진다(고정 예산 방식보다 개선). 현금 한도도 별도로 캡.
+- **`SellExecutionService.evaluateAndExecute(accountId, positionId)`**: `TradingSignalService.evaluateSellSignal`
+  로 판정 → 트리거 안 되면 판정 결과만(HOLD) 반환. 트리거되면 체결 → `Position.close(...)`(실현손익 계산) +
+  `account.credit(proceeds)`.
+- 계좌당 종목별 동시 보유(OPEN)는 1개로 제한 — 애플리케이션에서도 체크하고 DB 부분 unique 인덱스로도 보장.
+- **엔드포인트** (`account.enabled` + `signal.enabled` 모두 true 여야 등록):
+  - `POST /api/account/init?name=…&initialCapital=…` — 계좌 생성. 둘 다 생략 가능(`account.initial-capital` 기본값
+    사용). `initialCapital` 이 `account.min-initial-capital`(기본 10만원) 미만이면 422.
+  - `POST /api/account/{accountId}/buy/{symbol}` — 매수 신호 판정 후 BUY 면 체결(수동 테스트용). WAIT 면 422.
+  - `POST /api/account/{accountId}/positions/{positionId}/sell-check` — 매도 신호 판정, 트리거되면 체결.
+  - `GET /api/account/{accountId}/positions` — 보유 포지션 조회 (`?status=OPEN`/`CLOSED` 필터).
+- 실측(2026-09, `SIGNAL_ENTRY_THRESHOLD` 임시 조정해 전체 경로 검증):
+  - 초기자금 5만원 개설 시도 → 422("최소 100000원") / 정확히 10만원 → 성공 / 지정값·미지정 기본값 모두 정확 반영.
+  - 000660(BUY, entry_atr 135,339.8255) 매수 — 잔고 2,000만원·리스크1%(리스크예산 20만원), 손절폭(ATR×1.25)
+    ≈169,175원 → **1주**로 사이징(현금기준 한도는 10주였지만 리스크가 병목 — 변동성 기반 사이징 확인).
+    소액계좌(10만원)는 보유현금 조건(>10만원, 등호라 미충족)에서 이미 WAIT.
+  - 계좌 개설 → 매수 → 포지션 조회 전체 흐름 정상.
+
+```yaml
+account:
+  enabled: true                     # false/미설정 → Account/BuyExecution/SellExecution/MockOrderExecutor/컨트롤러 미생성
+  initial-capital: 10000000         # POST /api/account/init 기본 초기자금(원)
+  min-initial-capital: 100000       # 계좌 개설 최소 초기자금 — 미달이면 422
+  min-buy-unit: 100000              # 최소매수단위
+  risk-per-trade-pct: 0.01          # 변동성 기반 사이징: 거래당 리스크 허용 비율(잔고 대비, 기본 1%)
+  currency: KRW
+signal:
+  target-profit-rate: 0.025      # 매도 목표수익률
+  stop-loss-atr-multiple: 1.25   # 매도 손절 ATR 배수 (사이징의 손절폭 계산에도 재사용)
+  force-close-time: "15:20"      # 매도 강제청산 시각
+```
 
 ## 시세 적재 스케줄러
 
