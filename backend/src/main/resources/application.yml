@@ -175,6 +175,11 @@ backfill:
 #   daily-candle: 장 마감 후 최신 일봉 1건을 price_history 에 append. 수동: POST /api/admin/daily-candle-sync
 #   scoring: 장 시작 전 매력도 → 저점진입 스코어를 순서대로 계산. 수동: POST /api/admin/daily-scoring
 #           (attractiveness.enabled + entry-score.enabled + 이 enabled 가 모두 true 여야 빈 생성)
+#   auto-trade: "AI 모의투자" 핵심 연결 — scoring 이 만든 BUY 신호를 장 시작 후 자동으로 매수 체결.
+#           scoring(08:30)과는 분리된 별도 스케줄(기본 09:05). 수동: POST /api/admin/auto-trade
+#           (account.enabled + signal.enabled + 이 enabled 가 모두 true 여야 빈 생성)
+#           기본 enabled=false — 가상 계좌 현금을 실제로 움직이는 자동매매라 명시적으로 켜야 하고,
+#           account-id 도 반드시 지정해야 스케줄이 동작한다 (.env 의 AUTO_TRADE_ACCOUNT_ID).
 # ─────────────────────────────────────────────
 daily-batch:
   symbols: ${DAILY_BATCH_SYMBOLS:005930,000660,042700}
@@ -184,6 +189,17 @@ daily-batch:
   scoring:
     enabled: ${DAILY_SCORING_ENABLED:true}
     cron: ${DAILY_SCORING_CRON:0 30 8 * * MON-FRI}       # Asia/Seoul, 평일 08:30 (다른 배치 종료 후, 장 시작 전)
+  auto-trade:
+    enabled: ${AUTO_TRADE_ENABLED:false}
+    cron: ${AUTO_TRADE_CRON:0 5 9 * * MON-FRI}           # Asia/Seoul, 평일 09:05 (scoring 이후, 장중)
+    # 빈 문자열 placeholder 는 Long 필드에 안전하게 null 로 바인딩된다(기동 실패 안 함) — 확인됨.
+    # 반드시 이 명시적 ${} 형태를 쓸 것 — .env 값은 systemEnvironment 가 아니라 spring-dotenv 를 거치므로
+    # Spring 의 relaxed binding(전체 경로 이름 대문자·언더스코어 변환)이 적용되지 않는다. 즉
+    # DAILY_BATCH_AUTO_TRADE_ACCOUNT_ID 처럼 전체 경로를 이름으로 쓴 .env 값은 조용히 무시된다 — 반드시
+    # 아래 placeholder 가 참조하는 이름(AUTO_TRADE_ACCOUNT_ID)을 그대로 .env 에 써야 한다.
+    account-id: ${AUTO_TRADE_ACCOUNT_ID:}
+    market-open-time: ${AUTO_TRADE_MARKET_OPEN:09:00}
+    market-close-time: ${AUTO_TRADE_MARKET_CLOSE:15:30}
 
 # ─────────────────────────────────────────────
 # 저점 진입 스코어 엔진 (기획서 5장)

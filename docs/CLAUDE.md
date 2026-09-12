@@ -102,3 +102,9 @@
 - 백테스트는 생존편향 방지(Point-in-Time 유니버스), 거래비용 반영, train/validation/test
   3-way 분할(test는 마지막 1회만), walk-forward validation 원칙을 지킬 것.
 - 미국주식 양도소득세 export, 홈택스 신고 알림 등 세금 관리 기능은 확정 요구사항이니 후순위로 미루지 말 것.
+- **`backend/.env` 값을 바꾼 뒤 반영 안 되면**: (1) 서버를 완전히 재시작해야 함(핫리로드 안 됨, 죽었는지
+  `lsof -ti:8080` 로 실제 확인할 것) (2) `./gradlew bootRun` 은 반드시 `backend/` 안에서 실행(spring-dotenv 가
+  cwd 기준으로 `.env` 탐색) (3) `.env` 키 이름은 `application.yml` 의 `${...}` placeholder 안 이름과
+  정확히 일치해야 함 — `.env` 는 진짜 OS 환경변수가 아니라 spring-dotenv 를 거치므로 Spring 의 relaxed
+  binding(전체 경로 이름 자동 변환)이 적용 안 됨. 자세한 진단 방법은 `backend/README.md` 의 해당 트러블슈팅
+  절 참고.

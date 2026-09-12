@@ -28,6 +28,29 @@ curl localhost:8080/api/quotes/005930   # 토스증권 시세 (자격증명 필�
 `${TOSS_CLIENT_ID}` 등에 주입한다 (working directory = `backend/`). `.env` 는 git 제외,
 `.env.example` 에 필요한 키 목록이 있다. `.env` 없이도 앱은 뜨며, 토스증권 호출 시에만 자격증명이 필요하다.
 
+### ⚠️ `.env` 값을 바꿨는데 반영이 안 될 때 (자주 겪는 함정)
+
+1. **서버를 완전히 재시작해야 한다.** `.env` 는 기동 시 1회만 읽는다 — 이미 떠 있는 프로세스에는
+   절대 반영 안 됨. `./gradlew bootRun` 을 여러 번 "재시작"했다고 생각해도 이전 프로세스가 안 죽고
+   포트를 물고 있으면(특히 백그라운드로 띄운 경우) 새 값이 적용된 새 프로세스가 아니라 옛날 프로세스에
+   계속 요청이 가는 것일 수 있다 — `lsof -ti:8080` 로 실제 떠 있는 PID/포트를 확인하고 확실히 죽인 뒤 재기동할 것.
+2. **`./gradlew bootRun` 은 반드시 `backend/` 디렉토리 안에서 실행**해야 한다. spring-dotenv 는 `.env` 를
+   **현재 작업 디렉토리** 기준으로 찾는다 — 저장소 루트(`dipscore/`)에서 실행하면 `backend/.env` 를 못 찾는다.
+3. **`.env` 의 키 이름은 `application.yml` 의 `${...}` placeholder 안 이름과 정확히 일치해야 한다.**
+   `.env` 값은 진짜 OS 환경변수(`systemEnvironment`)가 아니라 spring-dotenv 를 거치므로, Spring 의
+   "relaxed binding"(예: `FOO_BAR_BAZ` 환경변수가 자동으로 `foo.bar-baz` 프로퍼티에 매칭되는 것)이
+   **적용되지 않는다.** 예를 들어 `daily-batch.auto-trade.enabled` 는 yml 에 `${AUTO_TRADE_ENABLED:false}`
+   로 적혀 있으므로 `.env` 에도 정확히 `AUTO_TRADE_ENABLED` 로 써야 하며, `DAILY_BATCH_AUTO_TRADE_ENABLED`
+   처럼 전체 경로를 그대로 쓰면 **조용히 무시되고 기본값이 적용된다** (에러도 안 남).
+   반대로 **진짜 쉘 환경변수**(`FOO=bar ./gradlew bootRun` 또는 `export`)로 넘기면 relaxed binding 이
+   정상 동작해 전체 경로 이름도 통한다 — `.env` 파일과 쉘 환경변수는 이 점에서 동작이 다르다.
+   설정값에 대응하는 `${...}` placeholder 가 아예 없는 경우(예: `Long`/`Boolean` 등 빈 문자열 기본값을
+   못 쓰는 필드)는 코드에 명시적으로 추가돼 있는지 먼저 확인할 것 — 없으면 `.env` 로 채울 방법이 없다.
+4. **확인 방법**: `management.endpoints.web.exposure.include` 를 넓혀서(`MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=*`
+   `MANAGEMENT_ENDPOINT_ENV_SHOW_VALUES=ALWAYS` 를 진짜 쉘 환경변수로 넘기면 됨) `GET /actuator/env/{key}`
+   로 실제 바인딩된 값과 출처(source)를 직접 확인할 수 있다. `GET /actuator/beans` 로 조건부 빈이 실제
+   등록됐는지도 확인 가능.
+
 ## 토스증권 오픈API 연동 구조
 
 | 구성요소 | 위치 | 역할 |
@@ -318,6 +341,46 @@ daily-batch:
   scoring:
     enabled: true                     # + attractiveness.enabled + entry-score.enabled
     cron: "0 30 8 * * MON-FRI"         # Asia/Seoul — 평일 08:30
+```
+
+## 일별 배치 — AI 모의투자 자동매매 (`auto-trade`)
+
+**"AI 모의투자"의 핵심 연결 고리.** `daily-scoring`(08:30) 이 계산해 둔 점수로 만들어지는 매수 신호를,
+장 시작 후 별도 스케줄(기본 09:05)로 `marketdata.dailybatch.AutoTradeJob` 이 실제로(가상) 매수 체결한다.
+스코어 계산과 체결을 **의도적으로 분리** — 체결은 장이 열려 있을 때만 해야 하므로.
+
+- **스케줄**: 기본 `0 5 9 * * MON-FRI` (평일 09:05 Asia/Seoul) — `daily-scoring`(08:30) 이후, 장 시작(09:00) 직후.
+- **장중 가드**: 실행 시점이 `account.market-open-time`~`market-close-time`(기본 09:00~15:30, Asia/Seoul) 밖이면
+  전부 건너뛰고 로그만 남긴다(`marketOpen:false`). `Clock` 주입으로 테스트 가능. 수동 트리거는
+  `?skipMarketHoursGuard=true` 로 우회 가능(테스트 편의용 — 스케줄 실행은 항상 가드 적용).
+- **흐름** (종목별 독립, 하나 실패해도 다음 종목 계속): `TradingSignalService.evaluateBuySignal(symbol, accountId)`
+  판정 → `WAIT` 면 `NO_SIGNAL` → `BUY` 면 이미 보유 중(OPEN 포지션)인지 확인 → 있으면 `ALREADY_HELD` →
+  없으면 `BuyExecutionService.buyIfSignaled(accountId, symbol)` 호출(변동성 기반 사이징으로 체결) → `BOUGHT`.
+  신호판정·체결 실패는 각각 `FAILED`.
+- 대상 계좌는 `daily-batch.auto-trade.account-id` 로 지정 — **미지정이면 스케줄 실행을 안전하게 건너뛴다**
+  (경고 로그만). `application.yml` 에 `account-id: ${AUTO_TRADE_ACCOUNT_ID:}` 로 명시적 placeholder 를 둬서
+  `.env` 의 **`AUTO_TRADE_ACCOUNT_ID`** 로 주입한다(빈 문자열 기본값은 `Long` 필드에 안전하게 null 로 바인딩됨,
+  기동 실패 안 함 — 확인됨). **`.env` 값은 이 placeholder 이름과 정확히 일치해야 동작한다** — `.env` 는
+  `systemEnvironment` 가 아니라 spring-dotenv 를 거치므로 Spring 의 relaxed binding(전체 경로 이름 자동
+  변환)이 적용되지 않는다. `DAILY_BATCH_AUTO_TRADE_ACCOUNT_ID` 처럼 전체 경로를 그대로 쓰면 조용히
+  무시되고 미지정 취급된다 (자세한 내용은 위 "`.env` 값을 바꿨는데 반영이 안 될 때" 참고).
+- 실행 결과 로그: `[auto-trade] 완료: N종목 중 BUY신호 x (매수체결 y / 이미보유 z / 실패 f), 신호없음 n`.
+- **수동 트리거**: `POST /api/admin/auto-trade` (`?symbols=…&accountId=…&skipMarketHoursGuard=true`).
+  응답: `{ requested, buySignals, bought, alreadyHeld, noSignal, failed, marketOpen, results:[{symbol, status, positionId, quantity, entryPrice, error}] }`
+  (status: `NO_SIGNAL`/`ALREADY_HELD`/`BOUGHT`/`FAILED`).
+- `account.enabled` + `signal.enabled` + `daily-batch.auto-trade.enabled` 가 모두 true 여야 빈 생성.
+- 실측(2026-09, `SIGNAL_ENTRY_THRESHOLD` 임시 조정): 장외 시간(22시) 가드 없이 호출 → `marketOpen:false`,
+  전부 스킵. `skipMarketHoursGuard=true` 로 우회 → 005930/042700 `NO_SIGNAL`, 000660 `BOUGHT`(1주 자동 체결,
+  변동성 기반 사이징 그대로 적용). 재실행 → 000660 `ALREADY_HELD`(중복매수 방지 확인).
+
+```yaml
+daily-batch:
+  auto-trade:
+    enabled: false                       # 기본 false — 가상 계좌 현금을 실제로 움직이므로 명시적으로 켜야 함
+    cron: "0 5 9 * * MON-FRI"            # Asia/Seoul — 평일 09:05
+    account-id: ${AUTO_TRADE_ACCOUNT_ID:}     # .env 의 AUTO_TRADE_ACCOUNT_ID 로 지정 (필수, 기본값 없음)
+    market-open-time: "09:00"
+    market-close-time: "15:30"
 ```
 
 ## 주간 배치 — 재무제표 적재 (`financial-snapshot-sync`)

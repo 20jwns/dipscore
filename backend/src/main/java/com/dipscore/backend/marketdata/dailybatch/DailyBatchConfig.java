@@ -5,8 +5,9 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * 일별 배치 인프라. 프로퍼티 바인딩({@link DailyBatchProperties}, {@link DailyCandleSyncProperties},
- * {@link DailyScoringProperties})은 항상, 실제 스케줄 잡({@link DailyCandleSyncJob}, {@link DailyScoringJob})은
- * 각자의 {@code *.enabled=true} 일 때만 생성된다.
+ * {@link DailyScoringProperties}, {@link AutoTradeProperties})은 항상, 실제 스케줄 잡
+ * ({@link DailyCandleSyncJob}, {@link DailyScoringJob}, {@link AutoTradeJob})은 각자의
+ * {@code *.enabled=true} 일 때만 생성된다.
  *
  * <p>{@code @EnableScheduling} 은 {@code marketdata.ingestion.IngestionConfig} 에서 이미 활성화되어 있어 생략.
  */
@@ -14,6 +15,7 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties({
         DailyBatchProperties.class,
         DailyCandleSyncProperties.class,
-        DailyScoringProperties.class})
+        DailyScoringProperties.class,
+        AutoTradeProperties.class})
 public class DailyBatchConfig {
 }
